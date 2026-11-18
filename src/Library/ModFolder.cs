@@ -353,7 +353,7 @@ public static class ModFolder
                 var sockets = new HashSet<Socket>();
                 foreach (var o in g.Options)
                 {
-                    var info = new OptionInfo { Name = o.Name, Sockets = SocketsOf(o.Files), RaceCodes = OptionCodes(o.Files.Paths) };
+                    var info = new OptionInfo { Name = o.Name, Sockets = SocketsOf(o.Files), RaceCodes = OptionCodes(o.Files.Paths), Numbers = NumbersOf(o.Files.Paths) };
                     foreach (var p in o.Files.Paths)
                         Note(p);
                     sockets.UnionWith(info.Sockets);
@@ -436,6 +436,21 @@ public static class ModFolder
             set.Add(GamePaths.SocketOf(p));
         set.UnionWith(files.EditSockets);
         return set;
+    }
+
+    /// <summary> The hair, face, tail and ear numbers an option's files are for. </summary>
+    private static Dictionary<Socket, HashSet<int>> NumbersOf(IEnumerable<string> paths)
+    {
+        var result = new Dictionary<Socket, HashSet<int>>();
+        foreach (var p in paths)
+            if (GamePaths.NumberOf(p) is var (socket, number))
+            {
+                if (!result.TryGetValue(socket, out var set))
+                    result[socket] = set = new HashSet<int>();
+                set.Add(number);
+            }
+
+        return result;
     }
 
     /// <summary> Race codes of one option, models first (like the old ModFolder.OptionCodes). </summary>

@@ -275,8 +275,15 @@ public sealed class OwnModMaker : IOwnModMaker
         meta["Name"] = name;
 
         var author = d.Author.Length > 0 ? d.Author : Loc.T("its author");
-        var line = Loc.F("{0} from “{1}” by {2}, copied out with Mod Closet for my own use. Everything in it is the author's work.",
-            piece.Length > 0 ? piece : name, d.ModName, author);
+        var line = d.ToHand switch
+        {
+            Hands.Left  => Loc.F("{0} from “{1}” by {2}, copied with Mod Closet for my own use, to wear on the left hand. Everything in it is the author's work.",
+                piece.Length > 0 ? piece : name, d.ModName, author),
+            Hands.Right => Loc.F("{0} from “{1}” by {2}, copied with Mod Closet for my own use, to wear on the right hand. Everything in it is the author's work.",
+                piece.Length > 0 ? piece : name, d.ModName, author),
+            _ => Loc.F("{0} from “{1}” by {2}, copied out with Mod Closet for my own use. Everything in it is the author's work.",
+                piece.Length > 0 ? piece : name, d.ModName, author),
+        };
         var old = OwnModPlanner.Str(meta["Description"]);
         meta["Description"] = old.Length > 0 ? line + "\n\n" + old : line;
 
@@ -302,6 +309,7 @@ public sealed class OwnModMaker : IOwnModMaker
             ["FromName"]   = d.ModName,
             ["Author"]     = d.Author,
             ["Slots"]      = new JsonArray(d.Sockets.Select(s => (JsonNode)s.ToString()).ToArray()),
+            ["ToHand"]     = d.ToHand.ToString(),
             ["Files"]      = d.Copy.Count,
         };
 

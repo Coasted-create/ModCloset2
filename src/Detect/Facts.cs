@@ -10,7 +10,7 @@ namespace ModCloset2.Detect;
 public sealed class ModFacts
 {
     /// <summary> Bumped when the reader starts collecting different facts (old census lines are then not comparable). </summary>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -59,6 +59,12 @@ public sealed class PartFacts
 
     /// <summary> Other and weapon parts: what kind of files, by count ("animation" 91, "effect" 95…). </summary>
     public Dictionary<string, int> OtherKinds { get; set; } = new();
+
+    /// <summary>
+    /// Ring-slot parts: the fingers any option of the mod changes, "r" (right ring), "l" (left ring) or "rl", by file
+    /// and swap paths (_rir / _ril) and by the finger slot of meta changes. "" for other parts and for older facts.
+    /// </summary>
+    public string Fingers { get; set; } = string.Empty;
 
     /// <summary> How many game paths the part redirects, and the first ones (for the census). </summary>
     public int PathCount { get; set; }

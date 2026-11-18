@@ -242,8 +242,15 @@ public sealed partial class ClosetWindow : Window, IDisposable
         _keySources.Lines.Clear();
         _face.OnYouAvailable = OnYouRequested is not null;
         _face.BottomRounding = Math.Max(0, ImGui.GetStyle().WindowRounding - 1);
-        _face.Draw(_canvas, _session, new WindowPlace(ImGui.GetWindowPos(), ImGui.GetWindowSize(), !ImGui.IsMouseDown(ImGuiMouseButton.Left)));
-        _canvas.End();
+        try
+        {
+            _face.Draw(_canvas, _session, new WindowPlace(ImGui.GetWindowPos(), ImGui.GetWindowSize(), !ImGui.IsMouseDown(ImGuiMouseButton.Left)));
+        }
+        finally
+        {
+            // also when the face throws: the draw list is put back together and the picture loads go on to the next frame
+            _canvas.End();
+        }
 
         if (_face.Request is { } request)
         {

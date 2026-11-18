@@ -23,8 +23,10 @@ public static partial class LookTexts
             Pieces.Rings     => Loc.T("the rings"),
             Pieces.Hair      => Loc.T("the hair"),
             Pieces.Face      => Loc.T("the face"),
+            Pieces.Makeup    => Loc.T("the makeup"),
             Pieces.Ears      => Loc.T("the ears"),
             Pieces.Tail      => Loc.T("the tail"),
+            Pieces.Bodies    => Loc.T("the body"),
             Pieces.Skin      => Loc.T("the skin"),
             Pieces.Nails     => Loc.T("the nails"),
             _                => Loc.T("the piece"),
@@ -54,20 +56,37 @@ public static partial class LookTexts
     public static bool HasNoun(string shelf)
         => Pieces.IsOutfitPiece(shelf) || Pieces.IsBodyPiece(shelf);
 
-    /// <summary> "6 pieces", "1 piece", "8 pieces, with hair". </summary>
-    public static string Meta(int pieces, bool withBody)
+    /// <summary> "6 pieces", "1 piece", "8 pieces, with hair", "3 pieces, hair and body only". </summary>
+    public static string Meta(int pieces, bool withBody, bool bodyOnly = false)
     {
         var count = pieces == 1 ? Loc.T("1 piece") : Loc.F("{0} pieces", pieces);
-        return withBody ? Loc.F("{0}, with hair", count) : count;
+        return bodyOnly ? Loc.F("{0}, hair and body only", count) : withBody ? Loc.F("{0}, with hair", count) : count;
     }
 
-    /// <summary> The try bar's quiet line: "5 pieces · your hair and body stay as they are". </summary>
-    public static string TryNote(int pieces, int missing, bool withBody)
+    /// <summary> "the hair", "the hair and the makeup", "the hair, the face and the tail". </summary>
+    public static string Nouns(IEnumerable<string> shelves)
+    {
+        var nouns = shelves.Select(Noun).Distinct().ToList();
+        return nouns.Count switch
+        {
+            0 => string.Empty,
+            1 => nouns[0],
+            _ => Loc.F("{0} and {1}", string.Join(", ", nouns.Take(nouns.Count - 1)), nouns[^1]),
+        };
+    }
+
+    /// <summary>
+    /// The try bar's quiet line: "5 pieces · your hair and body stay as they are", "5 pieces · with the hair and the
+    /// makeup" (the body shelves the look wears), "3 pieces · hair and body only, your clothes stay as they are".
+    /// </summary>
+    public static string TryNote(int pieces, int missing, IReadOnlyCollection<string> body, bool bodyOnly)
     {
         var parts = new List<string> { pieces == 1 ? Loc.T("1 piece") : Loc.F("{0} pieces", pieces) };
         if (missing > 0)
             parts.Add(Loc.F("{0} missing", missing));
-        parts.Add(withBody ? Loc.T("with your hair and body") : Loc.T("your hair and body stay as they are"));
+        parts.Add(bodyOnly ? Loc.T("your clothes stay as they are")
+                : body.Count > 0 ? Loc.F("with {0}", Nouns(body))
+                : Loc.T("your hair and body stay as they are"));
         return string.Join(" · ", parts);
     }
 

@@ -303,16 +303,18 @@ public sealed class Plugin : IDalamudPlugin
     /// the wardrobe goes above everything, as the old plugin did without its analysis. The check after Keep raises a part
     /// that still loses.
     /// </summary>
-    private int? AdvisePriority(string mod, IReadOnlyCollection<Socket> sockets, int current)
+    private int? AdvisePriority(string mod, IReadOnlyCollection<Socket> sockets, int current, IReadOnlyCollection<string> except)
     {
         if (!Library.Progress.Ready)
             return null;
         var top = int.MinValue;
         foreach (var part in Library.Parts)
         {
-            if (!sockets.Contains(part.Key.Socket) || part.Mod.Directory.Equals(mod, StringComparison.OrdinalIgnoreCase))
+            if (!sockets.Contains(part.Key.Socket) || part.Mod.Directory.Equals(mod, StringComparison.OrdinalIgnoreCase)
+             || except.Contains(part.Mod.Directory, StringComparer.OrdinalIgnoreCase))
                 continue;
-            if (Wardrobe.Settings.TryGetValue(part.Mod.Directory, out var s) && s.Enabled && s.Priority > top)
+            // as Penumbra uses it now: a temporary setting of another plugin (a Glamourer design's body) counts
+            if (Wardrobe.Effective(part.Mod.Directory) is { Enabled: true } s && s.Priority > top)
                 top = s.Priority;
         }
 

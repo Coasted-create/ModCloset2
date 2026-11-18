@@ -9,7 +9,7 @@ namespace ModCloset2.Detect;
 public sealed class Detector : IDetector
 {
     /// <summary> Bump when results may differ from before (rules, dictionary, reader), so caches are redone. </summary>
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 6;
 
     public int Version
         => CurrentVersion;

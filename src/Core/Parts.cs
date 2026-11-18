@@ -139,6 +139,15 @@ public sealed class PieceGuess
     public float Score { get; set; }
 }
 
+/// <summary> Which ring finger a ring-slot part has files for. </summary>
+public enum Hands : byte
+{
+    /// <summary> Both hands, or not a ring-slot part. </summary>
+    Both = 0,
+    Right = 1,
+    Left = 2,
+}
+
 /// <summary> What the detector found out about one part of a mod. Plain data, kept in a cache file. </summary>
 public sealed class PartInfo
 {
@@ -174,6 +183,12 @@ public sealed class PartInfo
 
     /// <summary> How many different models it replaces in this socket (2 or more: "n versions"). </summary>
     public int Models { get; set; } = 1;
+
+    /// <summary>
+    /// A ring-slot part: the fingers its files are for (a mod that replaces only the right ring's model shows only on
+    /// the right hand). <see cref="Hands.Both"/> for everything else.
+    /// </summary>
+    public Hands Hands { get; set; }
 
     public PartKey Key()
         => new(Mod, Socket);

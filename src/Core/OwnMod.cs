@@ -73,6 +73,14 @@ public sealed class OwnModAsk
     /// like the card it was made from. Groups not named keep the mod's own defaults.
     /// </summary>
     public IReadOnlyDictionary<string, IReadOnlyList<string>> Chosen { get; init; } = new Dictionary<string, IReadOnlyList<string>>();
+
+    /// <summary>
+    /// <see cref="Hands.Both"/>: an ordinary copy. <see cref="Hands.Left"/> or <see cref="Hands.Right"/>: a ring for the other
+    /// hand. The ring-slot files of the thing go to that finger's game paths in the copy (the right ring's model, materials
+    /// and their redirections become the left ring's, or the other way round), so the copy is worn on that hand. Nothing
+    /// else of the thing changes, and the mod it comes from stays as it is.
+    /// </summary>
+    public Hands ToHand { get; init; }
 }
 
 /// <summary>

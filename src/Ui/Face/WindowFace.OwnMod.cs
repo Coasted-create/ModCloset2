@@ -14,8 +14,12 @@ public sealed partial class WindowFace
     private bool _ownSeenMaking;
     private int _ownSentFrames = -1;
 
-    private void OpenOwnMod(PartKey part)
+    /// <summary> Both: "Make it its own mod". Left or Right: a copy of a one-slot ring, worn through that ring slot. </summary>
+    private Hands _ownHand;
+
+    private void OpenOwnMod(PartKey part, Hands to = Hands.Both)
     {
+        _ownHand       = to;
         _ownName       = string.Empty;
         _ownFilled     = false;
         _ownFocus      = false;
@@ -23,6 +27,15 @@ public sealed partial class WindowFace
         _ownSentFrames = -1;
         _ui.OpenPopup(PopOwnMod, _ui.PopupAnchor, part);
     }
+
+    /// <summary> The sheet's title: "Make it its own mod", or the ring slot a ring's copy is for. </summary>
+    private string OwnModTitle()
+        => _ownHand switch
+        {
+            Hands.Left  => Loc.T("A copy for the left ring slot"),
+            Hands.Right => Loc.T("A copy for the right ring slot"),
+            _           => Loc.T("Make it its own mod"),
+        };
 
     /// <summary> A size as people read it: "38 MB", "412 KB", "1.2 GB". </summary>
     public static string SizeText(long bytes)
@@ -42,7 +55,7 @@ public sealed partial class WindowFace
 
     private void OwnModPanel(PartKey part)
     {
-        var plan = _s.OwnModOf(part);
+        var plan = _ownHand == Hands.Both ? _s.OwnModOf(part) : _s.OwnModOf(part, _ownHand);
         if (plan is null)
         {
             // the card went away (or the session cannot do it): nothing to ask about
@@ -118,7 +131,7 @@ public sealed partial class WindowFace
 
         var x = box.X + P(20);
         var y = box.Y + P(20);
-        Painter.TextIn(_c, new Rect(x, y, inner, P(24)), Loc.T("Make it its own mod"), Theme.Strong, Theme.Text);
+        Painter.TextIn(_c, new Rect(x, y, inner, P(24)), OwnModTitle(), Theme.Strong, Theme.Text);
         y += P(24) + P(12);
 
         var typing = false;
@@ -191,7 +204,10 @@ public sealed partial class WindowFace
         var enter = typing && _ui.In.KeyPressed(Key.Enter);
         if ((Painter.Button(_ui, "own-mod-make", makeBox, make, ButtonKind.Primary, ok).Clicked || enter) && ok)
         {
-            _s.MakeOwnMod(part, _ownName.Trim());
+            if (_ownHand == Hands.Both)
+                _s.MakeOwnMod(part, _ownName.Trim());
+            else
+                _s.MakeOwnMod(part, _ownName.Trim(), _ownHand);
             _ownSentFrames = 0;
         }
 

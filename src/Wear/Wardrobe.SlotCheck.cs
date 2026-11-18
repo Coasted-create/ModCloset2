@@ -172,7 +172,7 @@ public sealed partial class Wardrobe
     private bool Raise(SlotCheck check, DressItem item, string aboveDir)
     {
         RefreshSettings(force: true);
-        var above  = Settings.TryGetValue(aboveDir, out var o) ? o.Priority : TopPriority();
+        var above  = Effective(aboveDir) is { Enabled: true } o ? o.Priority : TopPriority();
         var mine   = Settings.TryGetValue(item.Mod, out var m) ? m.Priority : 0;
         var target = above + 1;
         if (check.Preview)

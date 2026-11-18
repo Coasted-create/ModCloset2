@@ -78,7 +78,7 @@ public static class OldLooks
                         if (limited && IsGear(part.Key.Socket) && !only.Contains(part.Key.Socket))
                             continue;
                         // weapons and things not worn are no pieces; the first mod of a socket wins, as the old layer order had it
-                        if (!LookRules.Worn(part.Key.Socket) || look.Pieces.Any(p => p.Socket == part.Key.Socket))
+                        if (!LookRules.Worn(part.Key.Socket) || look.Pieces.Any(p => LookRules.Clash(p.Socket, p.Shelf, part.Key.Socket, part.Shelf)))
                             continue;
                         var version = -1;
                         foreach (var (slot, item) in items)
@@ -108,7 +108,7 @@ public static class OldLooks
 
                 // an old look of hair and body only is a whole-character look
                 if (look.Pieces.All(p => LookRules.IsBody(p.Shelf)))
-                    look.WithBody = true;
+                    look.Body = look.Pieces.Select(p => p.Shelf).Distinct().ToList();
                 looks.Add(look);
             }
             catch (Exception ex) when (ex is InvalidOperationException or FormatException or JsonException)

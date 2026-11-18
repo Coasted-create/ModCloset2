@@ -44,6 +44,9 @@ public sealed class OwnModDetails : OwnModContent
     /// </summary>
     public IReadOnlyList<string> BodyFilesLeftOut { get; init; } = Array.Empty<string>();
 
+    /// <summary> <see cref="Hands.Both"/>: an ordinary copy; else the hand the copied ring is worn on (<see cref="OwnModAsk.ToHand"/>). </summary>
+    public Hands ToHand { get; init; }
+
     /// <summary> Game paths of the entries that come along, by container ("" = default data, else "group/option"), for tests. </summary>
     public IReadOnlyList<string> Kept { get; init; } = Array.Empty<string>();
 }
@@ -159,6 +162,26 @@ internal sealed class OwnModPlanner
         if (!kept.Any(e => e.Kind != EntryKind.Meta))
             return No(Loc.T("This piece has no files of its own in the mod, only settings."), name, author);
 
+        // ---- a ring for the other hand: its ring models move to the other finger's game paths
+        var handKeys = new HashSet<string>(StringComparer.Ordinal);
+        if (_ask.ToHand != Hands.Both)
+        {
+            if (!_sockets.Contains(Socket.Rings))
+                return No(Loc.T("Only rings can be copied for the other hand."), name, author);
+            _to = _ask.ToHand == Hands.Left ? 'l' : 'r';
+            _from = _to == 'l' ? 'r' : 'l';
+            var ring = kept.Where(e => e.Kind != EntryKind.Meta && e.Info.Socket == Socket.Rings).ToList();
+            var fingers = ring.Select(e => GamePaths.FingerOfPath(e.Game))
+                .Concat(kept.Where(e => e.Kind == EntryKind.Meta).Select(e => GamePaths.Finger(e.Meta!.Slot)))
+                .Concat(wholeGroups.Select(gi => FingerOfGroup(json.Groups[gi].Node)))
+                .Where(c => c is not null).Select(c => c!.Value).ToHashSet();
+            if (fingers.Contains(_to))
+                return No(_to == 'l' ? Loc.T("This ring is already worn on the left hand.") : Loc.T("This ring is already worn on the right hand."), name, author);
+            handKeys = ring.Where(e => GamePaths.FingerOfPath(e.Game) == _from && e.Game.EndsWith(".mdl", StringComparison.Ordinal)).Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
+            if (handKeys.Count == 0)
+                return No(Loc.T("This piece has no ring of its own to copy for the other hand."), name, author);
+        }
+
         // ---- safety and completeness of what is copied
         foreach (var e in kept.Where(e => e.Kind == EntryKind.File))
             if (!IsSafe(e.Local))
@@ -206,8 +229,13 @@ internal sealed class OwnModPlanner
                 var list = IsCombining(node) ? node["Containers"] as JsonArray : node["Options"] as JsonArray;
                 for (var k = 0; k < mine.Count && list is not null && k < list.Count; ++k)
                     if (list[k] is JsonObject option)
+                    {
                         Filter(option, keptByContainer.GetValueOrDefault(mine[k]));
+                        OtherHand(option, handKeys);
+                    }
             }
+            else if (_ask.ToHand != Hands.Both && FingerOfGroup(node) == _from && node["Identifier"] is JsonObject id)
+                SwapFingerSlot(id);
 
             ApplyChoice(node, json.Groups[gi].Node);
             groups.Add(node);
@@ -219,6 +247,7 @@ internal sealed class OwnModPlanner
         {
             defaults = (JsonObject)json.Default.DeepClone();
             Filter(defaults, keptByContainer.GetValueOrDefault(0));
+            OtherHand(defaults, handKeys);
         }
 
         var meta = (JsonObject)json.Meta.DeepClone();
@@ -256,6 +285,7 @@ internal sealed class OwnModPlanner
             Default     = json.Layout == ModLayout.Separate ? defaults : null,
             GroupNodes  = json.Layout == ModLayout.Separate ? groups : Array.Empty<JsonObject>(),
             LongestPath = longest,
+            ToHand      = _ask.ToHand,
             BodyFilesLeftOut = bodyLeftOut,
             Kept        = kept.Where(e => e.Kind != EntryKind.Meta).Select(e => _containers[e.Container].Name + "|" + e.Game).Order(StringComparer.Ordinal).ToList(),
         };
@@ -540,6 +570,52 @@ internal sealed class OwnModPlanner
     /// <summary> A local path that stays in the mod's folder: no "..", no drive, no leading slash (<see cref="ModSource.IsSafe"/>, stricter). </summary>
     internal static bool IsSafe(string local)
         => ModSource.IsSafe(local) && local.TrimStart().Length > 0 && local.TrimStart()[0] is not ('/' or '\\');
+
+    private char _from = 'r';
+    private char _to = 'l';
+
+    /// <summary>
+    /// The copy for the other hand, in one option: the ring models' game paths go to the other finger ("…_rir.mdl" →
+    /// "…_ril.mdl"), and meta changes of the finger slot name the other finger. Materials and textures keep their game
+    /// paths: the game finds a ring's materials by the names inside its model, which do not change.
+    /// </summary>
+    private void OtherHand(JsonObject container, HashSet<string> modelKeys)
+    {
+        if (_ask.ToHand == Hands.Both)
+            return;
+        foreach (var section in new[] { "Files", "FileSwaps" })
+            if (container[section] is JsonObject map && map.Any(p => modelKeys.Contains(p.Key)))
+            {
+                var entries = map.Select(p => (p.Key, Value: p.Value?.DeepClone())).ToList();
+                map.Clear();
+                foreach (var (key, value) in entries)
+                    map[modelKeys.Contains(key) ? RenameFinger(key, _to) : key] = value;
+            }
+
+        if (container["Manipulations"] is JsonArray metas)
+            foreach (var m in metas.OfType<JsonObject>())
+                if (m["Manipulation"] is JsonObject body)
+                    SwapFingerSlot(body);
+    }
+
+    /// <summary> "RFinger" ↔ "LFinger" in a meta change's or an IMC group's slot field, when it names the finger the copy leaves. </summary>
+    private void SwapFingerSlot(JsonObject body)
+    {
+        foreach (var field in new[] { "Slot", "EquipSlot" })
+            if (Str(body[field]) is { Length: > 0 } slot && GamePaths.Finger(slot.ToLowerInvariant()) == _from)
+                body[field] = _to == 'l' ? "LFinger" : "RFinger";
+    }
+
+    private static char? FingerOfGroup(JsonObject group)
+        => Str(group["Type"]) == "Imc" && group["Identifier"] is JsonObject id ? GamePaths.Finger(ModDefinition.ImcIdentity(ModJson.Element(id)).Slot) : null;
+
+    /// <summary> "chara/accessory/a0001/model/c0201a0001_rir.mdl" → "…_ril.mdl" (only the file name's finger). </summary>
+    internal static string RenameFinger(string gamePath, char to)
+    {
+        var cut = gamePath.LastIndexOfAny(['/', '\\']) + 1;
+        var name = System.Text.RegularExpressions.Regex.Replace(gamePath[cut..], @"(?i)(c\d{4}a\d{4}_ri)[rl]", m => m.Groups[1].Value + (char.IsUpper(m.Value[^1]) ? char.ToUpperInvariant(to) : to));
+        return gamePath[..cut] + name;
+    }
 
     private static bool IsCombining(JsonObject group)
         => Str(group["Type"]) == "Combining";

@@ -96,7 +96,17 @@ public enum StepState
 /// <summary> One part to try or keep. <see cref="Nothing"/>: take off what this part shows instead. </summary>
 /// <param name="Options"> Options to use (null: the saved ones, else the defaults picked for the player's race and body). </param>
 /// <param name="Version"> Which of the part's versions (gear items of different models), 0 = the first. </param>
-public sealed record TryRequest(PartKey Key, bool Nothing = false, IReadOnlyDictionary<string, List<string>>? Options = null, int Version = 0);
+/// <param name="Hand">
+/// A ring-slot part: the finger it goes on, or is taken off (<see cref="Hands.Both"/>: every finger it has files for, as
+/// before). Nothing on the other hand changes.
+/// </param>
+/// <param name="Under">
+/// Keep of a lower layer (a body, a face's own textures): the mods of the upper layer that are on in its socket (skin
+/// textures, makeup) and must stay above it. They are not kept: their settings are left as they are, and only their
+/// priority is raised, and only when they have their own settings and are not above the kept part already.
+/// </param>
+public sealed record TryRequest(PartKey Key, bool Nothing = false, IReadOnlyDictionary<string, List<string>>? Options = null, int Version = 0,
+    Hands Hand = Hands.Both, IReadOnlyList<string>? Under = null);
 
 /// <summary> A sentence from the wardrobe for the status line. <see cref="Serial"/> grows with every new one. </summary>
 public sealed record WardrobeMessage(string Text, bool IsError, int Serial, DateTime At)
@@ -131,8 +141,20 @@ public interface IWardrobe
     /// </summary>
     IReadOnlyDictionary<string, List<string>> CurrentOptions(string mod);
 
+    /// <summary> The closet's own pick for a mod: its defaults with race and body choices made for the player, whatever is saved. </summary>
+    IReadOnlyDictionary<string, List<string>> FittedOptions(string mod);
+
+    /// <summary> The player's collection has options saved for the mod (then <see cref="CurrentOptions"/> are those, as they are). </summary>
+    bool OptionsSaved(string mod);
+
     /// <summary> Which version of a gear part is on (index into its versions), -1 when unknown. </summary>
     int VersionShowing(PartKey part);
+
+    /// <summary> The mod whose ring shows on that finger in the kept outfit (null: none of the closet's, or not known). </summary>
+    string? RingOn(Hands hand);
+
+    /// <summary> The character's customize value now ("Hairstyle", "Face", "TailShape"), null when not known. </summary>
+    int? CustomizeNow(string key);
 
     /// <summary> Tries these parts on over the kept outfit, replacing what was tried before. Empty: puts back. </summary>
     void Preview(IReadOnlyList<TryRequest> parts);

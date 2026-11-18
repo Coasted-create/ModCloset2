@@ -13,6 +13,16 @@ public static class PartBuilder
     public const float Step1Confidence = 0.6f;
 
     /// <summary> The shelf of a socket at step 1 (before the detector looked at the files). </summary>
+    /// <summary>
+    /// The shelf of a socket for a mod: body parts with body models of their own (a body mod: Rue+, TBSE, Neolithe…) on
+    /// Bodies, body parts with textures only (skin, tattoos) on Skin; every other socket as <see cref="ShelfOf(Socket)"/>.
+    /// The detector's piece, once it has answered, goes over this.
+    /// </summary>
+    public static string ShelfOf(Socket socket, ModFacts? facts)
+        => socket == Socket.BodyBase && facts?.Codes.TryGetValue(Socket.BodyBase, out var codes) == true && codes.Models.Count > 0
+            ? Pieces.Bodies
+            : ShelfOf(socket);
+
     public static string ShelfOf(Socket socket)
         => socket switch
         {
@@ -27,7 +37,7 @@ public static class PartBuilder
             Socket.Rings        => Pieces.Rings,
             Socket.Hair         => Pieces.Hair,
             Socket.Face         => Pieces.Face,
-            Socket.FaceTextures => Pieces.Face,
+            Socket.FaceTextures => Pieces.Makeup,
             Socket.Tail         => Pieces.Tail,
             Socket.EarShape     => Pieces.Ears,
             Socket.BodyBase     => Pieces.Skin,
@@ -81,10 +91,27 @@ public static class PartBuilder
         return result;
     }
 
-    /// <summary> What step 1 says about a part. </summary>
-    public static PartInfo Step1Info(string mod, Socket socket, string kind, IEnumerable<string> groups, int models)
+    /// <summary>
+    /// The fingers a ring-slot part has files for: the detector's answer, else the mod's ring files (only the right or only
+    /// the left ring), else both. <see cref="Hands.Both"/> for any other socket.
+    /// </summary>
+    public static Hands HandsOf(LibPart part)
     {
-        var shelf = ShelfOf(socket);
+        if (part.Key.Socket != Socket.Rings)
+            return Hands.Both;
+        if (part.Info.Hands != Hands.Both)
+            return part.Info.Hands;
+        var slots = part.Mod.Facts?.GearSlots;
+        if (slots is null)
+            return Hands.Both;
+        bool right = slots.Contains("RFinger"), left = slots.Contains("LFinger");
+        return right && !left ? Hands.Right : left && !right ? Hands.Left : Hands.Both;
+    }
+
+    /// <summary> What step 1 says about a part. </summary>
+    public static PartInfo Step1Info(string mod, Socket socket, string kind, IEnumerable<string> groups, int models, ModFacts? facts = null)
+    {
+        var shelf = ShelfOf(socket, facts);
         return new PartInfo
         {
             Mod        = mod,
@@ -224,11 +251,11 @@ public static class PartBuilder
                 if (info.Groups.Count == 0)
                     info.Groups = mineGroups;
                 if (Pieces.IsVirtual(info.Piece) || info.Piece == Pieces.Hidden || info.Piece.Length == 0)
-                    info.Piece = ShelfOf(socket);
+                    info.Piece = ShelfOf(socket, facts);
             }
             else
             {
-                info = Step1Info(mod.Directory, socket, s1.Kind ?? string.Empty, mineGroups, versions.Count);
+                info = Step1Info(mod.Directory, socket, s1.Kind ?? string.Empty, mineGroups, versions.Count, facts);
                 if (facts?.Codes.TryGetValue(socket, out var c) == true)
                     info.RaceCodes = (c.Models.Count > 0 ? c.Models : c.Other).Order().ToList();
             }

@@ -128,7 +128,8 @@ public static class Healing
     public static LookLibraryPart? Find(LookPiece piece, string shelf, ILooksLibrary library, Func<Index>? index, ISet<PartKey> taken)
     {
         var same = library.PartsOf(piece.Mod).Where(p => !taken.Contains(p.Key)).ToList();
-        if (same.FirstOrDefault(p => p.Shelf == shelf) is { } moved)
+        // (a body kept when body mods sat on Skin is the same place as Bodies now)
+        if (same.FirstOrDefault(p => LookRules.SameShelf(p.Shelf, shelf)) is { } moved)
             return moved;
         if (index is null || piece.Print is not { } print || print.Name.Length == 0 && print.Files.Count == 0)
             return null;

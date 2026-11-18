@@ -97,7 +97,8 @@ public static class Menu
         // a note wraps to the width the other rows give; it does not widen the menu
         var label  = items.Count == 0 ? 0 : items.Where(i => !i.IsNote).Select(i => c.Measure(i.Label, i.IsHeader ? Theme.Label : Theme.Body).X).DefaultIfEmpty(0).Max();
         var w      = Math.Max(label, hint) + 20 * u + 12 * u + (checks ? 24 * u : 0) + (subs ? 22 * u : 0) + (icons ? 26 * u : 0);
-        return Math.Clamp(w, minWidth * u, 360 * u);
+        // as wide as its longest row needs (up to 420), never wider than the window
+        return Math.Clamp(w, Math.Min(minWidth * u, c.Bounds.W - 16 * u), Math.Max(minWidth * u, Math.Min(420 * u, c.Bounds.W - 16 * u)));
     }
 
     private static float RowHeight(ICanvas c, MenuItem item, float u, float w)

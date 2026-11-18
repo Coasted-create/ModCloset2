@@ -60,8 +60,13 @@ public static partial class Decision
         // The "Other" part only stands on its own when it is more than helper files for the worn parts.
         var parts = facts.Parts.Where(p => p.Socket != Socket.Other || !IsSupportOnly(p, facts)).ToList();
 
-        // Rule 3: gear models that show only bare skin are the body (a body mod's shapes for the bare character).
+        // Rule 3: gear models that show only bare skin are the body (a body mod's shapes for the bare character). In a
+        // body mod (one with such models, or with body models of its own) every gear model on the bare body's sets (the
+        // empty slot, the smallclothes) is the body too, whatever it wears by default (its own underwear, nails,
+        // piercings): a body mod never shows its bare models as clothes.
         var bare = parts.Where(IsBareBody).ToList();
+        if (bare.Count > 0 || parts.Any(p => p.Socket == Socket.BodyBase && p.HasModel))
+            bare.AddRange(parts.Where(p => !bare.Contains(p) && GamePaths.IsGear(p.Socket) && OnBodySets(p) && p.Model is { SkinArea: > 0 }));
         parts = parts.Where(p => !bare.Contains(p)).ToList();
 
         // Per-part witnesses that need no other part.
@@ -125,6 +130,7 @@ public static partial class Decision
 
         if (bare.Count > 0)
             MergeBody(result, facts, bare);
+        JoinSculptTextures(result, facts);
         OneThingOneAnswer(result);
         return result;
     }
@@ -171,6 +177,36 @@ public static partial class Decision
         }
     }
 
+    /// <summary>
+    /// A sculpt's own face textures are the sculpt: in a mod with a face model, its face-texture part (the eyes, lashes,
+    /// decals it installs with the face) joins the Face part, so a sculpt is one card. Unless the mod offers makeup
+    /// choices of its own beside the sculpt: an option group that touches only face textures (not the face model) and
+    /// offers at least two looks (options other than off / none / omit). Then the face textures stay a Makeup part.
+    /// Face-path makeup options of a sculpt (textures for that face only) are part of the Face part already: they are
+    /// options of the sculpt, not makeup that can be worn without it.
+    /// </summary>
+    private static void JoinSculptTextures(ModDetection result, ModFacts facts)
+    {
+        var faceFacts = facts.Parts.FirstOrDefault(p => p.Socket == Socket.Face && p.HasModel);
+        var paintFacts = facts.Parts.FirstOrDefault(p => p.Socket == Socket.FaceTextures);
+        var face  = result.Parts.FirstOrDefault(p => p.Socket == Socket.Face);
+        var paint = result.Parts.FirstOrDefault(p => p.Socket == Socket.FaceTextures);
+        if (faceFacts is null || paintFacts is null || face is null || paint is null)
+            return;
+
+        if (paintFacts.Groups.Where(g => !faceFacts.Groups.Contains(g)).Any(g => MakeupChoice(facts.Groups.FirstOrDefault(x => x.Name == g))))
+            return;
+
+        result.Parts.Remove(paint);
+        face.Groups      = face.Groups.Concat(paint.Groups).Distinct().ToList();
+        face.RaceCodes   = face.RaceCodes.Concat(paint.RaceCodes).Distinct().Order().ToList();
+        face.TextureOnly = false;
+    }
+
+    /// <summary> An option group that offers at least two looks: its options other than off, none, omit, default… </summary>
+    private static bool MakeupChoice(GroupFacts? g)
+        => g is not null && g.Options.Count(o => !Words.Tokens(o).Any(t => t is "off" or "none" or "omit" or "disable" or "disabled" or "dont" or "no" or "remove" or "vanilla" or "default")) >= 2;
+
     /// <summary> The connected groups (two or more) of parts that a relation links. </summary>
     private static List<List<PartInfo>> Groups(List<PartInfo> parts, Func<PartInfo, PartInfo, bool> linked)
     {
@@ -194,16 +230,28 @@ public static partial class Decision
         => a.Model is { Area: > 0 } ma && b.Model is { Area: > 0 } mb && GamePaths.IsGear(a.Socket) && GamePaths.IsGear(b.Socket)
          && MathF.Abs(ma.Area - mb.Area) <= 0.01f * MathF.Max(ma.Area, mb.Area);
 
-    /// <summary> A gear part whose model has no surface of its own, only bare skin. </summary>
+    /// <summary>
+    /// A gear part whose model has no surface of its own, only bare skin; on the bare body's sets also one with a trace of
+    /// surface (pubic hair, a seam, a piercing stud), but not hands with nails (those are nails).
+    /// </summary>
     public static bool IsBareBody(PartFacts p)
-        => GamePaths.IsGear(p.Socket) && p.Model is { Area: <= 0, SkinArea: > 0 };
+        => GamePaths.IsGear(p.Socket) && p.Model is { SkinArea: > 0 } m
+         && (m.Area <= 0 || OnBodySets(p) && p.Socket != Socket.Hands && m.Area <= Tuning.Gear.NearBareArea && m.Area <= Tuning.Gear.NearBareShare * m.SkinArea);
+
+    /// <summary>
+    /// The gear sets of the bare body: e0000 (what shows when a slot is empty) and the smallclothes (e0279, e9903). A body
+    /// mod ships its shapes for the bare character there.
+    /// </summary>
+    public static bool OnBodySets(PartFacts p)
+        => p.Paths.Any(x => x.StartsWith("chara/equipment/e0000/model/", StringComparison.Ordinal))
+         || p.ModelSets.Count > 0 && p.ModelSets.All(s => s is 279 or 9903);
 
     private static bool ExplainedElsewhere(WordHit hit, PartFacts p, List<PartFacts> parts)
         => hit.Piece.Length > 0 && hit.Piece != SlotPrior(p.Socket)
          && parts.Any(q => q != p && GamePaths.IsGear(q.Socket) && SlotPrior(q.Socket) == hit.Piece);
 
     /// <summary>
-    /// Rule 3: the bare-skin gear models join the mod's body part (socket BodyBase, shelf Skin, kind "body"), with its
+    /// Rule 3: the bare-skin gear models join the mod's body part (socket BodyBase, shelf Bodies, kind "body"), with its
     /// skin textures when it has them: one part, not five.
     /// </summary>
     private static void MergeBody(ModDetection result, ModFacts facts, List<PartFacts> bare)
@@ -217,13 +265,13 @@ public static partial class Decision
             {
                 Mod        = facts.Mod,
                 Socket     = Socket.BodyBase,
-                Piece      = Pieces.Skin,
+                Piece      = Pieces.Bodies,
                 Confidence = Tuning.Gear.ConfConclusive,
-                Guesses    = { new PieceGuess { Piece = Pieces.Skin, Score = 1 } },
+                Guesses    = { new PieceGuess { Piece = Pieces.Bodies, Score = 1 } },
                 Evidence   =
                 {
                     new Evidence { Kind = EvidenceKind.Slot, Value = SlotPhrase(Socket.BodyBase), Piece = Pieces.Skin, Weight = 1 },
-                    new Evidence { Kind = EvidenceKind.Body, Value = "only bare skin", Piece = Pieces.Skin, Weight = 1 },
+                    new Evidence { Kind = EvidenceKind.Body, Value = "only bare skin", Piece = Pieces.Bodies, Weight = 1 },
                     new Evidence { Kind = EvidenceKind.Words, Value = "no hint" },
                 },
                 Models = 0,
@@ -232,13 +280,15 @@ public static partial class Decision
         }
         else
         {
-            body.Piece      = Pieces.Skin;
+            body.Piece      = Pieces.Bodies;
             body.Confidence = Math.Max(body.Confidence, Tuning.Gear.ConfConclusive);
+            body.Guesses    = body.Guesses.Where(g => g.Piece != Pieces.Bodies)
+                .Prepend(new PieceGuess { Piece = Pieces.Bodies, Score = 1 }).Take(4).ToList();
             var e = body.Evidence.FirstOrDefault(x => x.Kind == EvidenceKind.Body);
             if (e is not null && e.Value == "no hint")
             {
                 e.Value  = "only bare skin";
-                e.Piece  = Pieces.Skin;
+                e.Piece  = Pieces.Bodies;
                 e.Weight = 1;
             }
         }
@@ -373,7 +423,9 @@ public static partial class Decision
         var notWorn    = p.Socket is Socket.Other or Socket.MainHand or Socket.OffHand;
         if (conclusive)
         {
-            best       = SlotPrior(p.Socket);
+            // The body with models of its own is a body (Bodies); skin textures alone, tattoos, freckles are Skin. Words
+            // never make a body: a base's name in a mod's name only says what it was made for.
+            best       = p.Socket == Socket.BodyBase && p.HasModel ? Pieces.Bodies : SlotPrior(p.Socket);
             confidence = Math.Max(confidence, Tuning.Gear.ConfConclusive);
         }
         else if (notWorn && !(p.Socket == Socket.Other && p.OtherKinds.ContainsKey("custom") && !Pieces.IsOutfitPiece(best)))
@@ -406,7 +458,7 @@ public static partial class Decision
             Models     = Math.Max(1, p.ModelSets.Count),
         };
 
-        info.Kind = KindOf(p, best, body, wordHits, info.Confidence);
+        info.Kind = best == Pieces.Bodies ? "body" : KindOf(p, best, body, wordHits, info.Confidence);
 
         // Evidence: the three witnesses always (silent ones say "no hint"), folder and material when they mattered.
         info.Evidence.Add(Evidence(slot));
@@ -544,7 +596,7 @@ public static partial class Decision
             Socket.Rings        => Pieces.Rings,
             Socket.Hair         => Pieces.Hair,
             Socket.Face         => Pieces.Face,
-            Socket.FaceTextures => Pieces.Face,
+            Socket.FaceTextures => Pieces.Makeup,
             Socket.Tail         => Pieces.Tail,
             Socket.EarShape     => Pieces.Ears,
             Socket.BodyBase     => Pieces.Skin,
@@ -1032,8 +1084,10 @@ public static partial class Decision
             Socket.Hair when Has("hair")                                                    => (Pieces.Hair, "hair material"),
             Socket.Tail when Has("hair")                                                    => (Pieces.Tail, "fur material"),
             Socket.EarShape when Has("hair") || Has("skin")                                 => (Pieces.Ears, "ear material"),
-            Socket.Face or Socket.FaceTextures when Has("iris") && !Has("skin")             => (Pieces.Face, "eye material"),
-            Socket.Face or Socket.FaceTextures when Has("skin") || Has("iris")              => (Pieces.Face, "face material"),
+            Socket.FaceTextures when Has("iris") && !Has("skin")                            => (Pieces.Makeup, "eye material"),
+            Socket.FaceTextures when Has("skin") || Has("iris")                             => (Pieces.Makeup, "face material"),
+            Socket.Face when Has("iris") && !Has("skin")                                    => (Pieces.Face, "eye material"),
+            Socket.Face when Has("skin") || Has("iris")                                     => (Pieces.Face, "face material"),
             Socket.BodyBase or Socket.Other when Has("skin")                                => (Pieces.Skin, "skin material"),
             _                                                                               => null,
         };
@@ -1061,7 +1115,7 @@ public static partial class Decision
         [Pieces.Bracelets] = new() { "piercing" },
         [Pieces.Rings]     = new() { "piercing" },
         [Pieces.Gloves]    = new() { "armwarmers" },
-        [Pieces.Skin]      = new() { "body" },
+        [Pieces.Bodies]    = new() { "body" },
     };
 
     /// <summary> Kinds an unsure part may carry on any shelf: they name a shelf the user may want of their own. </summary>

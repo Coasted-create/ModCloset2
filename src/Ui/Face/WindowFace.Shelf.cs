@@ -236,8 +236,10 @@ public sealed partial class WindowFace
     /// </summary>
     private string WearingLabel(WearingInfo shown, int count, bool slim)
     {
+        // a thing being tried, not worn: "Trying"
+        var lead = shown.Trying ? Loc.T("Trying") : Loc.T("Wearing");
         if (count < 2)
-            return Loc.T("Wearing");
+            return lead;
         var kind = string.Empty;
         foreach (var card in _s.Cards)
         {
@@ -248,7 +250,7 @@ public sealed partial class WindowFace
             }
         }
 
-        return kind.Length == 0 ? Loc.T("Wearing") : slim ? kind : Loc.F("{0} · {1}", Loc.T("Wearing"), kind);
+        return kind.Length == 0 ? lead : slim ? kind : Loc.F("{0} · {1}", lead, kind);
     }
 
     /// <summary> What is on with this key on the selected shelf (for menus opened from the strip or a card). </summary>
@@ -383,11 +385,14 @@ public sealed partial class WindowFace
     {
         var slots = _s.SlotsOf(wearing.Key);
         var list = new List<StripChip>();
-        foreach (var o in wearing.Options)
+        // the mod's own groups first, then those the closet picks to fit the body ("Automatic" while nobody chose)
+        foreach (var o in wearing.Options.Where(o => !o.Fits).Concat(wearing.Options.Where(o => o.Fits)))
         {
             var value = o.Multi
                 ? o.On.Count switch { 0 => Loc.T("none"), 1 => o.On[0], _ => Loc.F("{0} on", o.On.Count) }
                 : o.On.FirstOrDefault() ?? string.Empty;
+            if (o.Automatic)
+                value = value.Length > 0 ? Loc.F("Automatic ({0})", value) : Loc.T("Automatic");
             list.Add(new StripChip(o.Group, value, o));
         }
 
@@ -420,6 +425,7 @@ public sealed partial class WindowFace
                 var more = chips.Count - i;
                 var mw   = _c.Measure(Loc.F("+{0}", more), Theme.Caption).X + P(20);
                 var box  = new Rect(x, r.Y, mw, r.H);
+                Stats.Places["chip-more"] = box;
                 var resp = _ui.Interact("chip-more", box);
                 _c.FillRect(box, resp.Hovered ? Theme.Picked : Theme.Chip, P(7));
                 Painter.TextIn(_c, box, Loc.F("+{0}", more), Theme.Caption, Theme.Text, 0.5f);
@@ -435,7 +441,7 @@ public sealed partial class WindowFace
     }
 
     private float ChipWidth(StripChip ch)
-        => P(10) + (ch.Label.Length > 0 ? _c.Measure(ch.Label, Theme.Caption).X + P(6) : 0) + Math.Min(P(140), _c.Measure(ch.Value, Theme.Caption).X) + P(6) + P(12) + P(8);
+        => P(10) + (ch.Option is { Fits: true } ? P(16) : 0) + (ch.Label.Length > 0 ? _c.Measure(ch.Label, Theme.Caption).X + P(6) : 0) + Math.Min(P(140), _c.Measure(ch.Value, Theme.Caption).X) + P(6) + P(12) + P(8);
 
     private void StripChipButton(Rect box, WearingInfo wearing, StripChip chip, int index)
     {
@@ -445,6 +451,13 @@ public sealed partial class WindowFace
         var open = chip.Slot ? _ui.IsOpen(PopSlots) : _ui.IsOpen(PopOption) && _ui.PopupContext is ValueTuple<WearingInfo, OptionChip> ctx && ctx.Item2 == chip.Option;
         _c.FillRect(box, resp.Hovered || open ? Theme.Picked : Theme.Chip, P(7));
         var x = box.X + P(10);
+        if (chip.Option is { Fits: true })
+        {
+            // the quiet "fits your body" mark: a small figure before the group's name
+            Painter.Icon(_c, Icons.Bodies, new Vector2(x + P(6), box.Center.Y), P(12), Theme.Muted, 1.6f);
+            x += P(16);
+        }
+
         if (chip.Label.Length > 0)
         {
             var lw = _c.Measure(chip.Label, Theme.Caption).X;
@@ -456,7 +469,9 @@ public sealed partial class WindowFace
         Painter.TextIn(_c, new Rect(x, box.Y, vw, box.H), chip.Value, Theme.Caption, Theme.Text);
         var chevron = chip.Option is null && !chip.Slot ? Icons.ChevronR : Icons.ChevronD;
         Painter.Icon(_c, chevron, new Vector2(box.Right - P(8) - P(6), box.Center.Y), P(12), Theme.Muted, 2);
-        if (chip.Option is null && !chip.Slot)
+        if (chip.Option is { Fits: true })
+            _ui.Tip(id, box, Loc.T("Picked to fit your body"));
+        else if (chip.Option is null && !chip.Slot)
             _ui.Tip(id, box, Loc.T("Next version"));
         else if (chip.Slot)
             _ui.Tip(id, box, Loc.T("Wear on another slot"));
@@ -519,6 +534,15 @@ public sealed partial class WindowFace
             => Rows == 0 ? 0 : PadTop + Rows * CardH + (Rows - 1) * Gap + PadTop;
     }
 
+    /// <summary> "Right ring slot only" / "Left ring slot only" for a ring with files for one ring slot; "" otherwise. </summary>
+    private static string HandOnly(Card card)
+        => card.OneHand switch
+        {
+            Hands.Right => Loc.T("Right ring slot only"),
+            Hands.Left  => Loc.T("Left ring slot only"),
+            _           => string.Empty,
+        };
+
     private object? _labelsOf;
     private bool _labelsAny;
 
@@ -532,7 +556,7 @@ public sealed partial class WindowFace
             _labelsAny = false;
             foreach (var c in cards)
             {
-                if (c.KindName.Length > 0)
+                if (c.KindName.Length > 0 || c.OneHand != Hands.Both)
                 {
                     _labelsAny = true;
                     break;
@@ -622,7 +646,7 @@ public sealed partial class WindowFace
     /// breaks every outfit.
     /// </summary>
     private static bool CanTakeOff(string piece)
-        => piece != Pieces.Skin;
+        => piece is not (Pieces.Skin or Pieces.Bodies);
 
     /// <summary> Taking off what is on in this shelf is being tried. </summary>
     private bool TakingOffHere()
@@ -714,7 +738,9 @@ public sealed partial class WindowFace
         var nameBox = new Rect(r.X + P(10), pic.Bottom, r.W - P(20), g.NameH);
         string fitted;
         // what tells cards of one mod apart ("Jacket", "Wrist slot"; on Everything else the kind), on every shelf
-        var second = !Searching ? card.KindName : card.KindName.Length > 0 ? Loc.F("{0} · {1}", card.PieceName, card.KindName) : card.PieceName;
+        // (a ring with files for one ring slot only says so when nothing else is said)
+        var label  = card.KindName.Length > 0 ? card.KindName : HandOnly(card);
+        var second = !Searching ? label : label.Length > 0 ? Loc.F("{0} · {1}", card.PieceName, label) : card.PieceName;
         if (g.NameH > (slim ? P(36) : P(40)))
         {
             var lh  = _c.LineHeight(Theme.Caption);

@@ -111,9 +111,25 @@ public sealed class LookData
     [JsonPropertyName("wears")]
     public double Wears { get; set; }
 
-    /// <summary> Also changes hair, face, ears, tail, skin and nails. </summary>
+    /// <summary>
+    /// The body shelves the look wears (hair, face, makeup, ears, tails, bodies, skin, nails), chosen one by one when it
+    /// was saved. Its body pieces on these shelves are put on with it; the other body shelves are left as they are (their
+    /// pieces are still kept, for "Also change hair and body"). Empty: a look of clothes only.
+    /// </summary>
+    [JsonPropertyName("body")]
+    public List<string> Body { get; set; } = new();
+
+    /// <summary> It wears some of the body (a card's "with hair" and the switch "Also change hair and body"). </summary>
+    [JsonIgnore]
+    public bool WithBody
+        => Body.Count > 0;
+
+    /// <summary>
+    /// The one switch looks had before the body shelves were chosen one by one (builds up to 0.6). Read once when a file
+    /// is loaded: on means every body shelf it holds a piece on. Written too, so an older build still reads the look.
+    /// </summary>
     [JsonPropertyName("withBody")]
-    public bool WithBody { get; set; }
+    public bool LegacyWithBody { get; set; }
 
     /// <summary>
     /// The pieces, at most one per socket: everything that was on (clothes, jewellery, the user's own shelves, and the
@@ -153,7 +169,8 @@ public sealed class LookData
             CreatedUtc  = CreatedUtc,
             LastWornUtc = LastWornUtc,
             Wears       = Wears,
-            WithBody    = WithBody,
+            Body        = Body.ToList(),
+            LegacyWithBody = LegacyWithBody,
             Pieces      = Pieces.Select(p => p.Copy()).ToList(),
             Empty       = Empty.ToList(),
             Colourways  = Colourways.Select(c => c.Copy()).ToList(),
@@ -281,7 +298,10 @@ public sealed class LooksFile
             look.Empty      ??= new List<Socket>();
             look.Colourways ??= new List<Colourway>();
             // at most one piece per socket, and a socket is either held or empty
-            look.Pieces = look.Pieces.Where(p => p is not null && p.Mod.Length > 0).GroupBy(p => p.Socket).Select(g => g.First()).ToList();
+            // one piece per place: a socket, in a layered socket one per shelf
+            look.Pieces = look.Pieces.Where(p => p is not null && p.Mod.Length > 0)
+                .GroupBy(p => (p.Socket, LookRules.Layered(p.Socket) ? p.Shelf ?? string.Empty : string.Empty)).Select(g => g.First())
+                .GroupBy(p => p.Key).Select(g => g.First()).ToList();
             look.Empty  = look.Empty.Distinct().Where(e => look.Pieces.All(p => p.Socket != e)).ToList();
             foreach (var piece in look.Pieces)
             {
@@ -295,6 +315,11 @@ public sealed class LooksFile
             }
 
             look.Colourways.RemoveAll(c => c is null);
+            // body shelves: once each, body shelves only; a look from before they were chosen one by one wears every body
+            // shelf it holds a piece on when its one switch was on
+            look.Body = (look.Body ?? new List<string>()).Where(Pieces.IsBodyPiece).Distinct().ToList();
+            if (look.Body.Count == 0 && look.LegacyWithBody)
+                look.Body = look.Pieces.Select(p => p.Shelf).Where(Pieces.IsBodyPiece).Distinct().ToList();
             look.Colourway = look.Colourways.Count == 0 ? 0 : Math.Clamp(look.Colourway, 0, look.Colourways.Count - 1);
         }
 

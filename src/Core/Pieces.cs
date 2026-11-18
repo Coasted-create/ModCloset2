@@ -39,13 +39,33 @@ public static class Pieces
     public const string Earrings  = "earrings";
     public const string Necklace  = "necklace";
     public const string Bracelets = "bracelets";
+    /// <summary> Rings for the right hand: ring-slot parts with files for the right finger (or both). </summary>
     public const string Rings     = "rings";
+
+    /// <summary>
+    /// Virtual: rings for the left hand, the ring-slot parts whose home is <see cref="Rings"/> and that have files for the
+    /// left finger (or both). A part is never placed here; moving a card here means moving it to <see cref="Rings"/>.
+    /// </summary>
+    public const string RingsLeft = "ringsleft";
 
     public const string Hair  = "hair";
     public const string Face  = "face";
+
+    /// <summary>
+    /// Makeup and other paint on the face: makeup, face paint and decals, eyes, brows, lashes, freckles of the face.
+    /// Sculpts (a face model of its own) stay on <see cref="Face"/>.
+    /// </summary>
+    public const string Makeup = "makeup";
     public const string Ears  = "ears";
     public const string Tail  = "tail";
     public const string Skin  = "skin";
+
+    /// <summary>
+    /// Body mods: the bare body's own models for one or more races (a body base and what is made on top of it); also
+    /// what shows of the body where nothing is worn. Skin textures, tattoos and markings without a body model of their
+    /// own stay on <see cref="Skin"/>.
+    /// </summary>
+    public const string Bodies = "bodies";
     public const string Nails = "nails";
 
     /// <summary> Virtual: parts the detector is unsure about. A part leaves it when the user picks a shelf. </summary>
@@ -73,12 +93,15 @@ public static class Pieces
         new(Earrings, "Earrings", PieceGroup.Jewellery, Earrings),
         new(Necklace, "Necklaces", PieceGroup.Jewellery, Necklace),
         new(Bracelets, "Bracelets", PieceGroup.Jewellery, Bracelets),
-        new(Rings, "Rings", PieceGroup.Jewellery, Rings),
+        new(Rings, "Rings · right", PieceGroup.Jewellery, Rings),
+        new(RingsLeft, "Rings · left", PieceGroup.Jewellery, RingsLeft),
 
         new(Hair, "Hair", PieceGroup.Body, Hair),
         new(Face, "Face", PieceGroup.Body, Face),
+        new(Makeup, "Makeup", PieceGroup.Body, Makeup),
         new(Ears, "Ears", PieceGroup.Body, Ears),
         new(Tail, "Tails", PieceGroup.Body, Tail),
+        new(Bodies, "Bodies", PieceGroup.Body, Bodies),
         new(Skin, "Skin", PieceGroup.Body, Skin),
         new(Nails, "Nails", PieceGroup.Body, Nails),
 
@@ -92,7 +115,7 @@ public static class Pieces
 
     /// <summary> Shelves a part cannot be detected into or dragged onto as its home (they are views). </summary>
     public static bool IsVirtual(string id)
-        => id is Outfits or ToSort;
+        => id is Outfits or ToSort or RingsLeft;
 
     /// <summary> True for the clothes and jewellery shelves (what a Look holds by default). </summary>
     public static bool IsOutfitPiece(string id)
@@ -100,5 +123,5 @@ public static class Pieces
 
     /// <summary> True for the body shelves (a Look only touches these when the user says so). </summary>
     public static bool IsBodyPiece(string id)
-        => id is Hair or Face or Ears or Tail or Skin or Nails;
+        => id is Hair or Face or Makeup or Ears or Tail or Bodies or Skin or Nails;
 }

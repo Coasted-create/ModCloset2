@@ -47,6 +47,9 @@ public sealed class OptionInfo
 
     /// <summary> Race codes of its character files, models first (like the old ModFolder.OptionCodes). </summary>
     public HashSet<int> RaceCodes { get; init; } = new();
+
+    /// <summary> The hair, face, tail and ear numbers its files are for (Hair / Face / Tail / EarShape → numbers). </summary>
+    public Dictionary<Socket, HashSet<int>> Numbers { get; init; } = new();
 }
 
 /// <summary> One option group of a mod. </summary>

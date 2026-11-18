@@ -43,6 +43,12 @@ public sealed class OwnCopy
     /// <summary> The library has had the new mod at least once (before that, its absence means nothing yet). </summary>
     public bool Seen { get; set; }
 
+    /// <summary>
+    /// A ring made for the other hand (<see cref="Hands.Left"/> or <see cref="Hands.Right"/>): the thing it came from keeps
+    /// its card, the copy is a ring of that hand. <see cref="Hands.Both"/>: an ordinary copy, which stands in for the thing.
+    /// </summary>
+    public Hands Hand { get; set; }
+
     public DateTime MadeUtc { get; set; }
 }
 
@@ -79,6 +85,12 @@ public sealed class ClosetData
 
     /// <summary> The version of a part the user picked last (index into its versions). </summary>
     public Dictionary<string, int> Versions { get; set; } = new();
+
+    /// <summary>
+    /// Body and race choices the user made by hand (part → group → choice): they win over the closet's own pick for the
+    /// player's body and race whenever the mod is put on with nothing saved for it, until the user picks "automatic" again.
+    /// </summary>
+    public Dictionary<string, Dictionary<string, List<string>>> FitChoices { get; set; } = new();
 
     /// <summary>
     /// The slot the user picked last for a thing its mod offers through several slots (key: the thing's first part, by the
@@ -134,6 +146,12 @@ public sealed class ClosetData
             {
                 Versions[to] = version;
                 changed      = true;
+            }
+
+            if (FitChoices.Remove(from, out var fit))
+            {
+                FitChoices[to] = fit;
+                changed        = true;
             }
 
             if (Slots.Remove(from, out var slot))

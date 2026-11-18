@@ -69,8 +69,9 @@ public sealed class JournalEntry
 /// <param name="Sockets"> The sockets of this mod being tried or kept (its other parts stay as they are). </param>
 /// <param name="Picks"> Glamourer slot id → item id to put on. </param>
 /// <param name="Customize"> Glamourer customize key → value (hairstyle, face, tail shape). </param>
+/// <param name="Under"> Mods of an upper layer that must stay above this one (<see cref="ModCloset2.Closet.TryRequest.Under"/>). </param>
 public sealed record DressItem(string Mod, string Name, Dictionary<string, List<string>> Options, IReadOnlyList<(byte SlotId, ulong ItemId)> Picks,
-    IReadOnlyDictionary<string, int> Customize, IReadOnlyList<Socket> Sockets);
+    IReadOnlyDictionary<string, int> Customize, IReadOnlyList<Socket> Sockets, IReadOnlyList<string>? Under = null);
 
 /// <summary> One part to take off: the mod and the socket it shows in. </summary>
 public sealed record TakeOffItem(string Mod, string Name, Socket Socket, IReadOnlyList<byte> SlotIds);
@@ -94,6 +95,89 @@ public enum RestoreTurn
 /// <summary> The wardrobe's rules that need no game: kept apart so the tests can hold them to their word. </summary>
 public static class WearRules
 {
+    /// <summary>
+    /// The highest priority among the mods that are on, as Penumbra uses them: a mod another plugin holds a temporary
+    /// setting for counts with that setting (on or off, its priority), every other one with the collection's. 0 when none.
+    /// </summary>
+    public static int TopPriority(IEnumerable<(string Mod, bool Enabled, int Priority)> collection,
+        IEnumerable<(string Mod, bool Enabled, int Priority)> othersTemporary, Func<string, bool> skip)
+    {
+        var temporary = othersTemporary.ToDictionary(t => t.Mod, StringComparer.OrdinalIgnoreCase);
+        var top       = (int?)null;
+        foreach (var (mod, enabled, priority) in collection.Where(c => !temporary.ContainsKey(c.Mod)).Concat(temporary.Values))
+            if (enabled && !skip(mod) && (top is null || priority > top))
+                top = priority;
+        return top ?? 0;
+    }
+
+    /// <summary> The first temporary priority of a try: above every mod that is on (<see cref="TopPriority"/>), at least the setting's. </summary>
+    public static int TryPriority(int temporaryPriority, int top)
+        => Math.Max(temporaryPriority, top + 1);
+
+    /// <summary>
+    /// The priority for a lower layer kept (a body, a face's own textures) under the upper layer that is on (skin
+    /// textures, makeup), touching the upper layer as little as possible:
+    /// - the kept part needs at least <paramref name="floor"/> to win its socket (int.MinValue: nothing to win against),
+    ///   and keeps its own priority <paramref name="now"/> when that is higher, as any kept part does;
+    /// - when every upper-layer mod is above that floor, the kept part goes just under the lowest of them (or stays where
+    ///   it is), and nothing of the upper layer changes;
+    /// - else an upper-layer mod with settings of its own that is not above the kept part is raised just above it (its
+    ///   priority only);
+    /// - an upper-layer mod whose settings come from a parent collection is never written: the kept part goes just under
+    ///   it instead, even below its floor, and <c>Held</c> names that mod so the user can be told.
+    /// </summary>
+    /// <param name="over"> The upper-layer mods that are on: directory, priority, inherited from a parent collection. </param>
+    public static (int Priority, List<(string Mod, int Priority)> Raise, string? Held) UnderLayers(int now, int floor,
+        IReadOnlyList<(string Mod, int Priority, bool Inherited)> over)
+    {
+        var want  = Math.Max(now, floor);
+        var raise = new List<(string Mod, int Priority)>();
+        if (over.Count == 0)
+            return (want, raise, null);
+
+        var lowest = over.Min(o => o.Priority);
+        if (floor == int.MinValue || lowest - 1 >= floor)
+            return (Math.Min(want, lowest - 1), raise, null);
+
+        // some of the upper layer is at or under the floor: the kept part takes its floor, under the inherited ones
+        var priority = floor;
+        string? held = null;
+        foreach (var o in over.Where(o => o.Inherited).OrderBy(o => o.Priority))
+            if (o.Priority - 1 < priority)
+            {
+                priority = o.Priority - 1;
+                held   ??= o.Mod;
+            }
+
+        foreach (var o in over.Where(o => !o.Inherited && o.Priority <= priority).OrderBy(o => o.Mod, StringComparer.OrdinalIgnoreCase))
+            raise.Add((o.Mod, priority + 1));
+        return (priority, raise, held);
+    }
+
+    /// <summary>
+    /// A part picked by a number (hair, face, tail, ears) shows only when the character has a number the mod replaces:
+    /// the numbers the part has for the player (<paramref name="numbers"/>, from Penumbra's changed items). Unknown (no
+    /// number known now, or none named for the part): it shows as far as anyone can tell.
+    /// </summary>
+    public static bool NumberShows(IReadOnlyCollection<int>? numbers, int? now)
+        => now is not { } n || numbers is not { Count: > 0 } || numbers.Contains(n);
+
+    /// <summary> Glamourer's slots of the right and the left ring finger. </summary>
+    public const byte RightRingId = 12;
+    public const byte LeftRingId  = 14;
+
+    /// <summary>
+    /// The finger slots a ring-slot part goes on (or comes off) for a hand: the right or the left finger alone, or every
+    /// finger it has (<see cref="Hands.Both"/>). A hand the part has no slot for gives its own slots, as before.
+    /// </summary>
+    public static IReadOnlyList<byte> FingerSlots(IReadOnlyList<byte> slotIds, Hands hand)
+    {
+        if (hand == Hands.Both)
+            return slotIds;
+        var id = hand == Hands.Left ? LeftRingId : RightRingId;
+        return slotIds.Contains(id) ? new[] { id } : slotIds;
+    }
+
     /// <summary>
     /// Every gear slot a mod has a piece in (the slots it was put on in, the slots its items cover, the slots its files
     /// change): the whole mod is on, not only the kept part. Both rings count as one: a ring piece takes either hand.

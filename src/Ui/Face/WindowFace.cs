@@ -81,6 +81,7 @@ public sealed partial class WindowFace
     private const string PopCard     = "card";
     private const string PopSlots    = "slots";
     private const string PopOwnMod   = "own-mod";
+    private const string PopSaveLook = "save-look";
     private const string PopOption   = "option";
     private const string PopMore     = "options-more";
     private const string PopSettings = "settings";
@@ -346,12 +347,18 @@ public sealed partial class WindowFace
         var undo     = new Rect(settings.X - P(10) - P(36), settings.Y, P(36), P(36));
         SettingsButton(settings);
         UndoButton(undo);
+        var lead = undo;
+        if (_s.Looks is not null)
+        {
+            lead = new Rect(undo.X - P(10) - P(36), undo.Y, P(36), P(36));
+            SaveLookButton(lead);
+        }
 
         var title  = Loc.T("Mod Closet");
         var titleW = _c.Measure(title, Theme.Title).X;
-        var room   = undo.X - P(10) - (bar.X + P(20) + titleW + P(24));
+        var room   = lead.X - P(10) - (bar.X + P(20) + titleW + P(24));
         var searchW = Math.Clamp(room, P(150), P(340));
-        var search  = new Rect(undo.X - P(10) - searchW, cy - P(18), searchW, P(36));
+        var search  = new Rect(lead.X - P(10) - searchW, cy - P(18), searchW, P(36));
         SearchField(search);
         TitleText(new Rect(bar.X + P(20), bar.Y, search.X - P(16) - bar.X - P(20), bar.H), Theme.Title);
     }
@@ -367,6 +374,13 @@ public sealed partial class WindowFace
         var undo     = new Rect(settings.X - P(6) - P(34), settings.Y, P(34), P(34));
         SettingsButton(settings);
         UndoButton(undo);
+        if (_s.Looks is not null)
+        {
+            var save = new Rect(undo.X - P(6) - P(34), undo.Y, P(34), P(34));
+            SaveLookButton(save);
+            undo = save;
+        }
+
         var left = bar.X + P(16);
         if (_slimSearch || _s.Search.Length > 0)
         {

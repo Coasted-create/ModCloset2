@@ -26,6 +26,8 @@ public static partial class FactReader
         public readonly HashSet<int> Races = new();
         public readonly HashSet<int> ModelRaces = new();
         public readonly HashSet<string> Metas = new(StringComparer.Ordinal);
+        public readonly HashSet<char> Fingers = new();      // ring models (and swaps of them) and the finger slot's meta changes
+        public readonly HashSet<char> TextureFingers = new(); // ring materials and textures
         public readonly HashSet<(int Group, int Option)> Options = new();
         public readonly List<(string GamePath, string Local, int Group, int Option, bool On, int Race)> Models = new();
         public readonly List<(string GamePath, string Local)> Materials = new();
@@ -164,6 +166,8 @@ public static partial class FactReader
                 // Meta edits only add to a part that has files; a mod of nothing but meta edits gets one Other part.
                 var acc = Part(socket);
                 acc.Metas.Add(meta.Type);
+                if (GamePaths.Finger(meta.Slot) is { } finger)
+                    acc.Fingers.Add(finger);
                 acc.Options.Add((gi, oi));
                 if (meta.Set > 0)
                     acc.Sets.Add(meta.Set);
@@ -176,6 +180,8 @@ public static partial class FactReader
             {
                 var acc = Part(s);
                 acc.Metas.Add("imc");
+                if (GamePaths.Finger(imc.Slot) is { } finger)
+                    acc.Fingers.Add(finger);
                 for (var oi = 0; oi < def.Groups[gi].Options.Count; ++oi)
                     acc.Options.Add((gi, oi));
                 if (def.Groups[gi].Options.Count == 0)
@@ -294,6 +300,10 @@ public static partial class FactReader
                 continue; // meta edits only: support for the parts that have files
 
             f.PathCount = acc.Paths.Count;
+            // The finger a ring is worn on is the model's (and the slot's settings'); a ring's materials go where its model
+            // names them, whichever finger wears it. A retexture without a model is for the finger its textures name.
+            if (f.Socket == Socket.Rings)
+                f.Fingers = string.Concat((acc.Fingers.Count > 0 ? acc.Fingers : acc.TextureFingers).Order());
             f.Paths     = acc.Paths.Order(StringComparer.Ordinal).Take(Tuning.MaxPathsKept).ToList();
             f.Sets      = acc.Sets.Order().ToList();
             f.ModelSets = acc.ModelSets.Order().ToList();
@@ -359,6 +369,8 @@ public static partial class FactReader
     private static void Add(Acc acc, PathInfo info, string gamePath, string local, int gi, int oi, bool on)
     {
         acc.Paths.Add(gamePath);
+        if (acc.Facts.Socket == Socket.Rings && GamePaths.FingerOfPath(gamePath) is { } finger)
+            (info.File == FileKind.Model ? acc.Fingers : acc.TextureFingers).Add(finger);
         acc.Options.Add((gi, oi));
         if (local.Length > 0)
             acc.Locals.Add(local);

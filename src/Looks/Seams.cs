@@ -74,6 +74,14 @@ public interface ILooksOutfit
 
     /// <summary> Tries a look on (replacing what was tried before). Also a try with no parts and only colours. </summary>
     void TryLook(LookTry look);
+
+    /// <summary>
+    /// Shows one sentence on the closet's status line (what a save did: "Saved as “Gala night”."). Translated already.
+    /// The default does nothing, so the plugin builds before the session shows it.
+    /// </summary>
+    void Say(string text)
+    {
+    }
 }
 
 /// <summary> One part of the library, as the looks need it. </summary>

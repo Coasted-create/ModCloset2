@@ -59,6 +59,40 @@ public static class SearchText
         return true;
     }
 
+    /// <summary> Letters and digits only, lower case: "Rue+" and "rue +" are both "rue". </summary>
+    public static string Squash(string text)
+    {
+        var sb = new StringBuilder(text.Length);
+        foreach (var c in text)
+            if (char.IsLetterOrDigit(c))
+                sb.Append(char.ToLowerInvariant(c));
+        return sb.ToString();
+    }
+
+    /// <summary> A name as the ranking of found parts reads it: squashed, and its words. </summary>
+    public sealed record NameKey(string Squashed, string[] Words);
+
+    public static NameKey KeyOf(string name)
+        => new(Squash(name), Words(name));
+
+    /// <summary>
+    /// How well a name answers a search, before the usual card order: 0 the name is the query (case, spaces and
+    /// punctuation aside: "rue+" finds "Rue+" and "RUE +"), 1 it starts with it ("Rue+ Edit"), 2 every query word is a
+    /// whole word of it ("Dress for Rue+"), 3 the rest (as before).
+    /// </summary>
+    public static int NameRank(NameKey name, string squashedQuery, IReadOnlyList<string> queryWords)
+    {
+        if (squashedQuery.Length == 0)
+            return 3;
+        if (name.Squashed == squashedQuery)
+            return 0;
+        if (name.Squashed.StartsWith(squashedQuery, StringComparison.Ordinal))
+            return 1;
+        if (queryWords.Count > 0 && queryWords.All(q => name.Words.Contains(q, StringComparer.Ordinal)))
+            return 2;
+        return 3;
+    }
+
     /// <summary> True when two words differ by at most one letter added, missing, changed, or two neighbours swapped. </summary>
     public static bool WithinOne(string a, string b)
     {

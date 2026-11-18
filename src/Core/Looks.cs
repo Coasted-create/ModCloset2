@@ -55,6 +55,9 @@ public sealed class LookCard
     /// <summary> The colourway that is on, or was worn last. </summary>
     public int Colourway { get; init; }
 
+    /// <summary> The body shelves this look puts on when worn (empty: it leaves hair and body as they are). </summary>
+    public IReadOnlyList<string> BodyShelves { get; init; } = Array.Empty<string>();
+
     /// <summary> It also changes hair, face, ears, tail, skin and nails. </summary>
     public bool WithBody { get; init; }
 }
@@ -71,7 +74,7 @@ public sealed class WearingNow
     /// <summary> "You changed the shoes", "You changed 3 pieces"; "" when it is the look exactly, or no look. </summary>
     public string ChangeText { get; init; } = string.Empty;
 
-    /// <summary> Every clothes and jewellery piece that is on, in outfit order. </summary>
+    /// <summary> Every clothes and jewellery piece that is on, in outfit order; the body things when only those are on. </summary>
     public IReadOnlyList<LookTile> Tiles { get; init; } = Array.Empty<LookTile>();
 
     /// <summary> There is something on that is not exactly a pinned look already ("Pin as new" makes sense). </summary>
@@ -79,6 +82,43 @@ public sealed class WearingNow
 
     /// <summary> It started from a look and differs from it ("Update …" makes sense). </summary>
     public bool CanUpdate { get; init; }
+
+    /// <summary> The name a look saved from what is on now would get ("" when there is nothing to save). </summary>
+    public string ProposedName { get; init; } = string.Empty;
+
+    /// <summary>
+    /// What "Save look" would save: nothing at all; clothes (and jewellery), with the body shelves the person ticks;
+    /// or only body things (hair, a body, skin, makeup…).
+    /// </summary>
+    public SaveWhat Saves { get; init; }
+
+    /// <summary>
+    /// The body shelves that have something on now (<see cref="Pieces.IsBodyPiece"/>: hair, face, makeup, ears, tails,
+    /// bodies, skin, nails), in rail order, each with whether a save takes it by default (as the worn look has it; all of
+    /// them when only body things are on; none otherwise). The save sheet offers one tick per entry.
+    /// </summary>
+    public IReadOnlyList<SaveBodyShelf> BodyShelves { get; init; } = Array.Empty<SaveBodyShelf>();
+}
+
+/// <summary> One body shelf a save can take along, with what is on there. </summary>
+public sealed class SaveBodyShelf
+{
+    public string Shelf { get; init; } = string.Empty;
+
+    /// <summary> The shelf's name and what is on there ("Hair", "Long waves"). </summary>
+    public string Name { get; init; } = string.Empty;
+    public string Worn { get; init; } = string.Empty;
+
+    /// <summary> Taken along unless the person unticks it. </summary>
+    public bool Default { get; init; }
+}
+
+/// <summary> What a save of what is on now would hold. </summary>
+public enum SaveWhat : byte
+{
+    Nothing = 0,
+    Clothes = 1,
+    BodyOnly = 2,
 }
 
 public interface ILooks
@@ -106,6 +146,21 @@ public interface ILooks
 
     /// <summary> Pins what is on as a new look and returns its id. Same pieces as an existing look: becomes a colourway of it. </summary>
     Guid PinNow();
+
+    /// <summary>
+    /// Saves what is on now as a new look under <paramref name="name"/>: every clothes and jewellery piece that is on, and
+    /// of the body shelves exactly those in <paramref name="bodyShelves"/> (from <see cref="WearingNow.BodyShelves"/>). One
+    /// undo step; says so on the status line ("Saved as “{0}”."). Same pieces as an existing look: becomes a colourway
+    /// of it, as <see cref="PinNow"/>. Wearing the look later puts on what it holds and leaves the body shelves it does
+    /// not hold as they are. Returns the look's id; <see cref="Guid.Empty"/> when nothing would be saved.
+    /// </summary>
+    Guid SaveNow(string name, IReadOnlyCollection<string> bodyShelves)
+        => PinNow();
+
+    /// <summary> Which body shelves a look puts on when worn (one undo step; a body-only look keeps at least one). </summary>
+    void SetBodyShelves(Guid look, IReadOnlyCollection<string> bodyShelves)
+    {
+    }
 
     /// <summary> Makes a look what is on now. </summary>
     void UpdateFromNow(Guid look);

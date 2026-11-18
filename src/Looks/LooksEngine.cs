@@ -288,7 +288,13 @@ public sealed class LooksEngine : ILooks
 
         // sockets the look knows as empty: what is on there comes off (a body piece stays, unless the look is with body)
         foreach (var socket in l.Empty)
-            if (LookRules.CanTakeOff(socket) && _now.In(socket) is { } worn && (l.WithBody || !LookRules.IsBody(worn.Shelf)))
+            if (LookRules.CanTakeOff(socket) && _now.In(socket) is { } worn && (!LookRules.IsBody(worn.Shelf) || _lens.Wears(l, worn.Shelf)))
+                off.Add(worn.Key);
+
+        // another layer on a body shelf the look wears (other makeup) comes off; the body socket is never emptied, a body
+        // put on wins over the one there by priority (the session's business)
+        foreach (var worn in _lens.ExtraLayers(l, _now))
+            if (LookRules.CanTakeOff(worn.Key.Socket) && parts.All(p => !LookRules.Clash(p.Key.Socket, ShelfNow(p.Key), worn.Key.Socket, worn.Shelf)) && !off.Contains(worn.Key))
                 off.Add(worn.Key);
 
         string? colours = null;
@@ -316,7 +322,7 @@ public sealed class LooksEngine : ILooks
 
         if (parts.Count == 0 && off.Count == 0 && colours is null)
             return; // it is on already, exactly
-        _outfit.TryLook(new LookTry(l.Id, way, NameOf(l), LookTexts.TryNote(Matching.Count(l, _lens), missing, l.WithBody), parts, off, colours));
+        _outfit.TryLook(new LookTry(l.Id, way, NameOf(l), LookTexts.TryNote(Matching.Count(l, _lens), missing, l.Body, _lens.BodyOnly(l)), parts, off, colours));
     }
 
     public void Pin(Guid look)
@@ -345,27 +351,48 @@ public sealed class LooksEngine : ILooks
     }
 
     public Guid PinNow()
+        => Save(null, null, sheet: false);
+
+    /// <summary>
+    /// Saves what is on as a look named <paramref name="name"/>: the clothes and jewellery that are on, and of the body
+    /// shelves exactly <paramref name="bodyShelves"/>. One undo step, one sentence on the status line.
+    /// </summary>
+    public Guid SaveNow(string name, IReadOnlyCollection<string> bodyShelves)
+        => Save(name ?? string.Empty, bodyShelves ?? Array.Empty<string>(), sheet: true);
+
+    /// <summary>
+    /// Pin now and Save look. <paramref name="body"/> null: the body shelves a pin takes (none with clothes on, all of
+    /// them when only body things are on). A pin is "exactly a look already" for any look the outfit is; a save from the
+    /// sheet only for one that also wears the same body shelves (a save with the hair is another look than one without).
+    /// </summary>
+    private Guid Save(string? name, IReadOnlyCollection<string>? body, bool sheet)
     {
         Poll();
-        if (!_now.AnyClothes)
+        if (!_now.Any)
             return Guid.Empty;
-        var now     = _clock.UtcNow;
-        var made    = Capture(_now, now);
+        var now  = _clock.UtcNow;
+        var made = Capture(_now, now, body);
+        if (Matching.Count(made, _lens) == 0)
+            return Guid.Empty; // body things only, and none of them chosen
         var colours = ColourwayNow(made);
 
         // the lately entry of this very outfit is pinned with it (it is not listed twice)
-        var lately = _looks.Where(l => !l.Pinned && Matching.Same(l, _now, _lens) && SameColours(l, colours)).Select(l => l.Id).ToList();
+        var lately = _looks.Where(l => !l.Pinned && Matching.Same(l, _now, _lens) && Matching.SameBody(l, made) && SameColours(l, colours))
+            .Select(l => l.Id).ToList();
 
-        if ((Worn() ?? TheSame()) is { } existing)
+        var existing = sheet ? SameSave(made) : Worn() ?? TheSame();
+        if (existing is not null)
         {
             var known = colours is null || existing.Colourways.Any(c => KeyOf(c.Colours) == KeyOf(colours.Colours));
             if (known && lately.Count == 0)
             {
-                // exactly a look already: nothing to pin
+                // exactly a look already: nothing to save
                 if (colours is not null)
                     existing.Colourway = IndexOf(existing, colours);
                 Choose(existing.Id);
                 Changed();
+                if (sheet)
+                    Say(Loc.F("This is already “{0}”.", NameOf(existing)));
                 return existing.Id;
             }
 
@@ -375,7 +402,9 @@ public sealed class LooksEngine : ILooks
             foreach (var id in lately)
                 RemoveLook(_byId[id]);
             Choose(existing.Id);
-            Step(Loc.F("Pin {0}", NameOf(existing)), before, Snapshot(lately.Append(existing.Id)));
+            Step(sheet ? Loc.F("Save {0}", NameOf(existing)) : Loc.F("Pin {0}", NameOf(existing)), before, Snapshot(lately.Append(existing.Id)));
+            if (sheet)
+                Say(known ? Loc.F("Saved as “{0}”.", NameOf(existing)) : Loc.F("Saved as a colourway of “{0}”.", NameOf(existing)));
             return existing.Id;
         }
 
@@ -386,23 +415,70 @@ public sealed class LooksEngine : ILooks
         made.Wears       = 1 + lately.Sum(id => Weight(_byId[id], now));
         if (colours is not null)
             made.Colourways.Add(colours);
+        // a name of its own, unless it is the one the look would make itself (then it keeps following its main piece)
+        var own = (name ?? string.Empty).Trim();
+        made.Name = own == AutoName(made) ? string.Empty : own;
         foreach (var id in lately)
             RemoveLook(_byId[id]);
         AddLook(made);
         Choose(made.Id);
-        Step(Loc.F("Pin {0}", NameOf(made)), start, Snapshot(lately.Append(made.Id)));
+        Step(sheet ? Loc.F("Save {0}", NameOf(made)) : Loc.F("Pin {0}", NameOf(made)), start, Snapshot(lately.Append(made.Id)));
+        if (sheet)
+            Say(Loc.F("Saved as “{0}”.", NameOf(made)));
         return made.Id;
     }
 
+    /// <summary>
+    /// For Save look: the pinned look that is exactly what would be saved (the outfit, and the same body shelves): the
+    /// look being worn if it is one, else the one in these colours, else the only one; null when there is none, or
+    /// several equal ones (then a new look is saved rather than a colourway given to the first).
+    /// </summary>
+    private LookData? SameSave(LookData made)
+    {
+        var same = _looks.Where(l => l.Pinned && Matching.Count(l, _lens) > 0 && Matching.Same(l, _now, _lens) && Matching.SameBody(l, made)).ToList();
+        if (_base is { } id && same.FirstOrDefault(l => l.Id == id) is { } chosen)
+            return chosen;
+        var coloured = Top(same.Where(Fits).ToList());
+        if (coloured.Count == 1)
+            return coloured[0];
+        return same.Count == 1 ? same[0] : null;
+    }
+
+    private void Say(string text)
+    {
+        try
+        {
+            _outfit.Say(text);
+        }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"Mod Closet 2 looks: the status line did not take a sentence: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Makes a look what is on now. The body shelves it wears stay the same (the pieces on them are taken as they are
+    /// now; a shelf with nothing on any more is dropped); clothes go as they are now. A look of body things only stays one
+    /// (clothes that are on are not taken into it). A clothes look updated with no clothes on becomes a look of the body
+    /// things that are on. The body shelves are changed with <see cref="SetBody"/> (or "Also change hair and body").
+    /// </summary>
     public void UpdateFromNow(Guid look)
     {
         Poll();
-        if (Find(look) is not { } l || !_now.AnyClothes)
+        if (Find(look) is not { } l || !_now.Any)
             return;
-        var before = Snapshot(l.Id);
-        var made   = Capture(_now, _clock.UtcNow);
+        var before   = Snapshot(l.Id);
+        var bodyOnly = _lens.BodyOnly(l) || !_now.AnyClothes;
+        var made     = Capture(_now, _clock.UtcNow, bodyOnly && !_lens.BodyOnly(l) ? null : l.Body);
+        if (bodyOnly)
+        {
+            made.Pieces.RemoveAll(p => !_lens.IsBody(p));
+            made.Empty.Clear();
+        }
+
         l.Pieces = made.Pieces;
         l.Empty  = made.Empty;
+        l.Body   = made.Body;
         if (ColourwayNow(l) is { } colours)
         {
             if (l.Colourways.Count == 0)
@@ -467,27 +543,80 @@ public sealed class LooksEngine : ILooks
         Step(text, before, Snapshot(l.Id));
     }
 
+    /// <summary>
+    /// "Also change hair and body": on, the look wears every body shelf it holds a piece on (taking the body that is on now
+    /// when it is the outfit's look or holds none); off, it wears none. A look of body things only cannot be switched off
+    /// (nothing would be left).
+    /// </summary>
     public void SetWithBody(Guid look, bool withBody)
     {
         Poll();
-        if (Find(look) is not { } l || l.WithBody == withBody)
+        if (Find(look) is not { } l || l.WithBody == withBody || !withBody && _lens.BodyOnly(l))
             return;
         var before = Snapshot(l.Id);
-        l.WithBody = withBody;
-        // switched on while it is the outfit's look, or never seen with a body: the hair and body that are on now (in the
-        // sockets its outfit pieces leave free)
-        if (withBody && (_base == l.Id || !l.Pieces.Any(_lens.IsBody)))
+        if (withBody)
         {
-            l.Pieces.RemoveAll(_lens.IsBody);
-            foreach (var piece in Capture(_now, _clock.UtcNow).Pieces.Where(_lens.IsBody))
-                if (l.Pieces.All(p => p.Socket != piece.Socket))
-                {
-                    l.Pieces.Add(piece);
-                    l.Empty.Remove(piece.Socket);
-                }
+            // switched on while it is the outfit's look, or never seen with a body: the body that is on now (in the
+            // sockets its outfit pieces leave free)
+            if (_base == l.Id || !l.Pieces.Any(_lens.IsBody))
+                TakeBody(l, null);
+            l.Body = BodyShelvesOf(l.Pieces.Where(_lens.IsBody).Select(_lens.ShelfOf));
         }
+        else
+        {
+            l.Body.Clear();
+        }
+
         Step(withBody ? Loc.F("Let {0} change hair and body", NameOf(l)) : Loc.F("Let {0} leave hair and body alone", NameOf(l)), before, Snapshot(l.Id));
     }
+
+    /// <summary>
+    /// Chooses the body shelves a look wears, one by one (not in <see cref="ILooks"/> yet). A shelf it holds no piece on
+    /// takes what is on there now. A look of body things only keeps at least one.
+    /// </summary>
+    public void SetBody(Guid look, IReadOnlyCollection<string> shelves)
+    {
+        Poll();
+        if (Find(look) is not { } l)
+            return;
+        var want = BodyShelvesOf(shelves.Where(LookRules.IsBody));
+        if (want.Count == 0 && _lens.BodyOnly(l))
+            return;
+        var missing = want.Where(s => !l.Pieces.Any(p => _lens.ShelfOf(p) == s)).ToList();
+        if (Matching.SameBody(l, new LookData { Body = want }) && missing.Count == 0)
+            return;
+        var before = Snapshot(l.Id);
+        if (missing.Count > 0)
+            TakeBody(l, missing);
+        l.Body = BodyShelvesOf(want.Where(s => l.Pieces.Any(p => _lens.ShelfOf(p) == s)));
+        Step(Loc.F("Choose what {0} changes of hair and body", NameOf(l)), before, Snapshot(l.Id));
+    }
+
+    /// <summary> <see cref="ILooks.SetBodyShelves"/>: which body shelves a look puts on when worn (see <see cref="SetBody"/>). </summary>
+    public void SetBodyShelves(Guid look, IReadOnlyCollection<string> bodyShelves)
+        => SetBody(look, bodyShelves ?? Array.Empty<string>());
+
+    /// <summary> The shelf a part is on now ("" when the library does not know it). </summary>
+    private string ShelfNow(PartKey key)
+        => _library.Part(key)?.Shelf ?? string.Empty;
+
+    /// <summary> Puts the body pieces that are on now (of these shelves, or all) into a look, in sockets its other pieces leave free. </summary>
+    private void TakeBody(LookData look, IReadOnlyCollection<string>? shelves)
+    {
+        var now = Capture(_now, _clock.UtcNow, null).Pieces.Where(_lens.IsBody)
+            .Where(p => shelves is null || shelves.Contains(_lens.ShelfOf(p))).ToList();
+        look.Pieces.RemoveAll(p => _lens.IsBody(p) && (shelves is null || shelves.Contains(_lens.ShelfOf(p))));
+        foreach (var piece in now)
+            if (look.Pieces.All(p => !LookRules.Clash(p.Socket, _lens.ShelfOf(p), piece.Socket, _lens.ShelfOf(piece))))
+            {
+                look.Pieces.Add(piece);
+                look.Empty.Remove(piece.Socket);
+            }
+    }
+
+    /// <summary> Body shelves, once each, in rail order. </summary>
+    private static List<string> BodyShelvesOf(IEnumerable<string> shelves)
+        => shelves.Where(LookRules.IsBody).Distinct().OrderBy(LookRules.BodyIndex).ToList();
 
     public void RemoveColourway(Guid look, int colourway)
     {
@@ -523,7 +652,8 @@ public sealed class LooksEngine : ILooks
         else
         {
             var taken = Matching.Keys(l);
-            var shelf = _library.PartsOn(piece).Where(c => !taken.Contains(c.Key)).ToList();
+            // a body kept when body mods sat on Skin is offered bodies from Bodies too (and the other way round)
+            var shelf = LookRules.Kin(piece).SelectMany(_library.PartsOn).Where(c => !taken.Contains(c.Key)).ToList();
             cards = Healing.Replacements(p, shelf, _detector, LookRules.Replacements).Select(MakeCard).ToList();
         }
 
@@ -543,7 +673,7 @@ public sealed class LooksEngine : ILooks
         if (old is not null)
             l.Pieces.Remove(old);
         // at most one piece per socket: what the look held in the new part's socket makes room
-        l.Pieces.RemoveAll(p => p.Socket == with.Socket);
+        l.Pieces.RemoveAll(p => LookRules.Clash(p.Socket, _lens.ShelfOf(p), with.Socket, part.Shelf));
         l.Empty.Remove(with.Socket);
         l.Pieces.Add(new LookPiece { Mod = with.Mod, Socket = with.Socket, Shelf = part.Shelf, Version = -1, Print = PrintOf(part) });
         Step(Loc.F("Replace a piece of {0}", NameOf(l)), before, Snapshot(l.Id));
@@ -556,6 +686,8 @@ public sealed class LooksEngine : ILooks
     private LookPiece? PieceOn(LookData look, string shelf, Socket? socket)
     {
         var onShelf = look.Pieces.Where(p => _lens.ShelfOf(p) == shelf).OrderBy(p => p.Socket).ToList();
+        if (onShelf.Count == 0) // a body kept on Skin, asked for as Bodies (or the other way round)
+            onShelf = look.Pieces.Where(p => LookRules.SameShelf(_lens.ShelfOf(p), shelf)).OrderBy(p => p.Socket).ToList();
         var missing = onShelf.Where(Gone).ToList();
         var pool    = missing.Count > 0 ? missing : onShelf;
         return pool.FirstOrDefault(p => p.Socket == socket) ?? pool.FirstOrDefault();
@@ -706,9 +838,9 @@ public sealed class LooksEngine : ILooks
     private void Settle(DateTime now)
     {
         _unsettledSince = null;
-        if (!_now.AnyClothes)
-            return;
-        var made    = Capture(_now, now);
+        if (!_now.Any)
+            return; // nothing on at all (body things alone are an outfit too)
+        var made    = Capture(_now, now, null);
         var colours = ColourwayNow(made);
 
         // exactly a pinned look (in one of its colourways, or one without any): a wear of the look being worn. The quiet
@@ -733,6 +865,7 @@ public sealed class LooksEngine : ILooks
             // the same outfit: its pieces are the same, the body is the one that is on now
             again.Pieces = made.Pieces;
             again.Empty  = made.Empty;
+            again.Body   = made.Body;
             Wear(again, now);
             Changed();
             return;
@@ -768,18 +901,32 @@ public sealed class LooksEngine : ILooks
     /// The outfit as a look (not pinned, not added): every kept part that is on, one per socket (outfit and body), and the
     /// gear sockets with nothing on.
     /// </summary>
-    private LookData Capture(OutfitNow outfit, DateTime now)
+    /// <summary>
+    /// <paramref name="body"/>: the body shelves it wears (only those with something on count); null: a pin's choice,
+    /// none with clothes on, every body shelf with something on when there are only body things. A look of body things
+    /// only knows no empty sockets: it says nothing about clothes.
+    /// </summary>
+    /// <param name="prints"> False: without the fingerprints (no file names read), for a name only. </param>
+    private LookData Capture(OutfitNow outfit, DateTime now, IReadOnlyCollection<string>? body, bool prints = true)
     {
         var look = new LookData { CreatedUtc = now, LastWornUtc = now };
         foreach (var worn in outfit.All)
-            look.Pieces.Add(PieceOf(worn));
+            look.Pieces.Add(PieceOf(worn, prints));
+        var on = outfit.All.Where(w => LookRules.IsBody(w.Shelf)).Select(w => w.Shelf).ToList();
+        if (!outfit.AnyClothes)
+        {
+            look.Body = BodyShelvesOf(body ?? on).Where(on.Contains).ToList();
+            return look;
+        }
+
         foreach (var socket in LookRules.GearSockets)
             if (outfit.In(socket) is null)
                 look.Empty.Add(socket);
+        look.Body = BodyShelvesOf(body ?? Array.Empty<string>()).Where(on.Contains).ToList();
         return look;
     }
 
-    private LookPiece PieceOf(WornPart worn)
+    private LookPiece PieceOf(WornPart worn, bool prints = true)
     {
         var part   = _library.Part(worn.Key);
         var groups = part?.Groups ?? Array.Empty<string>();
@@ -790,7 +937,7 @@ public sealed class LooksEngine : ILooks
             Shelf   = worn.Shelf.Length > 0 ? worn.Shelf : part?.Shelf ?? string.Empty,
             Options = worn.Options.Where(kv => groups.Contains(kv.Key, StringComparer.Ordinal)).ToDictionary(kv => kv.Key, kv => kv.Value.ToList()),
             Version = worn.Version,
-            Print   = part is null ? null : PrintOf(part),
+            Print   = part is null || !prints ? null : PrintOf(part),
         };
     }
 
@@ -862,7 +1009,7 @@ public sealed class LooksEngine : ILooks
                 if (Healing.Find(piece, piece.Shelf, _library, full ? HealIndex : null, taken) is not { } found)
                     continue;
                 // at most one piece per socket: a part in a socket another piece holds is no answer
-                if (found.Key.Socket != piece.Socket && look.Pieces.Any(p => p != piece && p.Socket == found.Key.Socket))
+                if (look.Pieces.Any(p => p != piece && (p.Key == found.Key || LookRules.Clash(p.Socket, _lens.ShelfOf(p), found.Key.Socket, found.Shelf))))
                     continue;
                 _log?.Invoke($"Mod Closet 2 looks: found {piece.Mod} again as {found.Key.Mod}.");
                 taken.Remove(piece.Key);
@@ -878,6 +1025,21 @@ public sealed class LooksEngine : ILooks
                 changed = true;
             }
         }
+
+        // a chosen body shelf none of its pieces is on any more, while a kin shelf has them (a body chosen as Skin before
+        // Bodies was split off, now on Bodies): the choice follows the pieces
+        foreach (var look in _looks)
+            for (var i = 0; i < look.Body.Count; ++i)
+            {
+                var chosen = look.Body[i];
+                if (look.Pieces.Any(p => _lens.ShelfOf(p) == chosen))
+                    continue;
+                var kin = LookRules.Kin(chosen).FirstOrDefault(k => k != chosen && !look.Body.Contains(k) && look.Pieces.Any(p => _lens.ShelfOf(p) == k));
+                if (kin is null)
+                    continue;
+                look.Body[i] = kin;
+                changed      = true;
+            }
 
         if (changed)
             Changed();
@@ -1147,7 +1309,7 @@ public sealed class LooksEngine : ILooks
         => (Matching.Same(look, _now, _lens) ? 1 : 0,
             ColourwayOn(look) >= 0 ? 1 : 0,
             Matching.Count(look, _lens),
-            look.WithBody ? 1 : 0,
+            look.Body.Count,
             look.Pieces.Where(p => _lens.InScope(look, p)).Sum(p => p.Options.Count + (p.Version >= 0 ? 1 : 0)));
 
     /// <summary> The looks of the best rank (several when they are equal). </summary>
@@ -1260,7 +1422,7 @@ public sealed class LooksEngine : ILooks
         return new Fixed(
             _names.GetValueOrDefault(look.Id) ?? NameOf(look),
             CollagePieces(look).Select(p => Tile(p, false)).ToList(),
-            LookTexts.Meta(Matching.Count(look, _lens), look.WithBody),
+            LookTexts.Meta(Matching.Count(look, _lens), look.WithBody, _lens.BodyOnly(look)),
             look.Pinned ? string.Empty : LookTexts.When(_clock.ToLocal(look.LastWornUtc), _clock.ToLocal(now)),
             look.Pieces.Count(p => _lens.InScope(look, p) && Gone(p)),
             look.Colourways.Select(c => c.Main).ToList());
@@ -1295,7 +1457,8 @@ public sealed class LooksEngine : ILooks
             Missing    = f.Missing,
             Colourways = f.Colourways,
             Colourway  = look.Colourways.Count == 0 ? 0 : Math.Clamp(way, 0, look.Colourways.Count - 1),
-            WithBody   = look.WithBody,
+            WithBody    = look.WithBody,
+            BodyShelves = look.Body.ToList(),
         };
     }
 
@@ -1346,23 +1509,65 @@ public sealed class LooksEngine : ILooks
         var colours = look is not null && diffs.Count == 0 && !ColoursOn(look);
         var changed = diffs.Where(d => d.Now is not null).Select(d => d.Socket).ToHashSet();
 
-        // every outfit piece that is on, one tile each, in outfit order
-        var tiles = _now.All.Where(w => !LookRules.IsBody(w.Shelf))
-            .OrderBy(w => LookRules.Order(w.Shelf)).ThenBy(w => w.Key.Socket)
-            .Select(w => Tile(w, changed.Contains(w.Key.Socket)))
-            .ToList();
-
         var exactly = _looks.Any(l => l.Pinned && Matching.Same(l, _now, _lens) && ColoursOn(l));
         return new WearingNow
         {
-            Look       = look?.Id,
-            Name       = look is null ? string.Empty : names.GetValueOrDefault(look.Id) ?? NameOf(look),
-            ChangeText = look is null ? string.Empty : LookTexts.Change(diffs.Select(d => (d.Kind, Thing(look, d))).ToList(), colours),
-            Tiles      = tiles,
-            CanPin     = _now.AnyClothes && !exactly,
-            CanUpdate  = look is not null && _now.AnyClothes && (diffs.Count > 0 || colours),
+            Look         = look?.Id,
+            Name         = look is null ? string.Empty : names.GetValueOrDefault(look.Id) ?? NameOf(look),
+            ChangeText   = look is null ? string.Empty : LookTexts.Change(diffs.Select(d => (d.Kind, Thing(look, d))).ToList(), colours),
+            Tiles        = NowTiles(changed),
+            CanPin       = _now.Any && !exactly,
+            CanUpdate    = look is not null && _now.Any && (diffs.Count > 0 || colours),
+            ProposedName = ProposedName(names),
+            Saves        = !_now.Any ? SaveWhat.Nothing : _now.AnyClothes ? SaveWhat.Clothes : SaveWhat.BodyOnly,
+            BodyShelves  = SaveShelves(look),
         };
     }
+
+    /// <summary>
+    /// The pieces that are on, one tile each, in outfit order: the clothes and jewellery; when only body things are on,
+    /// those (so "Wearing now" never says nothing is on while a body is).
+    /// </summary>
+    private List<LookTile> NowTiles(HashSet<Socket> changed)
+    {
+        var shown = _now.AnyClothes ? _now.All.Where(w => !LookRules.IsBody(w.Shelf)) : _now.All;
+        return shown.OrderBy(w => LookRules.Order(w.Shelf)).ThenBy(w => w.Key.Socket).Select(w => Tile(w, changed.Contains(w.Key.Socket))).ToList();
+    }
+
+    /// <summary>
+    /// The name a save of what is on would get: its main piece's (as a pin names it), with a number when a pinned look is
+    /// called that already. "" when there is nothing to save.
+    /// </summary>
+    private string ProposedName(Dictionary<Guid, string> names)
+    {
+        if (!_now.Any)
+            return string.Empty;
+        var made = Capture(_now, _clock.UtcNow, null, prints: false);
+        var name = AutoName(made);
+        var taken = _looks.Where(l => l.Pinned).Select(l => names.GetValueOrDefault(l.Id) ?? NameOf(l)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!taken.Contains(name))
+            return name;
+        for (var n = 2; ; ++n)
+            if (!taken.Contains($"{name} {n}"))
+                return $"{name} {n}";
+    }
+
+    /// <summary>
+    /// The body shelves with something on, in rail order, for the save sheet's ticks: what is on there, and whether a save
+    /// takes it unless unticked (as the look being worn has it; all of them when only body things are on; else none).
+    /// </summary>
+    private List<SaveBodyShelf> SaveShelves(LookData? worn)
+        => _now.All.Where(w => LookRules.IsBody(w.Shelf))
+            .GroupBy(w => w.Shelf)
+            .OrderBy(g => LookRules.BodyIndex(g.Key))
+            .Select(g => new SaveBodyShelf
+            {
+                Shelf   = g.Key,
+                Name    = _library.ShelfName(g.Key),
+                Worn    = string.Join(", ", g.OrderBy(w => w.Key.Socket).Select(w => _library.Part(w.Key)?.Name ?? w.Key.Mod)),
+                Default = worn is not null ? _lens.Wears(worn, g.Key) : !_now.AnyClothes,
+            })
+            .ToList();
 
     /// <summary>
     /// "Wearing now" when several looks are equally the outfit: all of them named ("Gala night or Beach day"), what
@@ -1382,10 +1587,12 @@ public sealed class LooksEngine : ILooks
             Name       = name,
             ChangeText = diffs.Count > 0 ? LookTexts.Change(diffs.Select(d => (d.Kind, Thing(looks[0], d))).ToList(), false)
                                          : Loc.T("These looks are the same. Click the one you are wearing."),
-            Tiles      = _now.All.Where(w => !LookRules.IsBody(w.Shelf)).OrderBy(w => LookRules.Order(w.Shelf)).ThenBy(w => w.Key.Socket)
-                .Select(w => Tile(w, changed.Contains(w.Key.Socket))).ToList(),
-            CanPin     = _now.AnyClothes && !exactly,
-            CanUpdate  = false,
+            Tiles        = NowTiles(changed),
+            CanPin       = _now.Any && !exactly,
+            CanUpdate    = false,
+            ProposedName = ProposedName(names),
+            Saves        = !_now.Any ? SaveWhat.Nothing : _now.AnyClothes ? SaveWhat.Clothes : SaveWhat.BodyOnly,
+            BodyShelves  = SaveShelves(null),
         };
     }
 
@@ -1582,6 +1789,8 @@ public sealed class LooksEngine : ILooks
         if (!_loaded)
             return; // a file that could not be read is never written over
         _saveDirty = false;
+        foreach (var look in _looks.Concat(_removed))
+            look.LegacyWithBody = look.WithBody; // for an older build reading this file
         var file = new LooksFile { ImportedOld = _importedOld, Base = _base, Looks = _looks, Removed = _removed };
         try
         {

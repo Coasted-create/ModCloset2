@@ -43,9 +43,10 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
     /// <summary>
     /// The priority a kept mod needs to win in the given sockets (just above what it competes with there), or null when
     /// that is not known (then it goes above every enabled mod, as the old plugin did without its analysis).
-    /// Arguments: mod, sockets being kept, its current priority.
+    /// Arguments: mod, sockets being kept, its current priority (int.MinValue: only what it needs, int.MinValue when it
+    /// competes with nothing), mods not to count as competitors (an upper layer it goes under).
     /// </summary>
-    public Func<string, IReadOnlyCollection<Socket>, int, int?>? PriorityAdvisor { get; set; }
+    public Func<string, IReadOnlyCollection<Socket>, int, IReadOnlyCollection<string>, int?>? PriorityAdvisor { get; set; }
 
     // ---- trying on ----
 
@@ -143,6 +144,37 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
 
     public IReadOnlyDictionary<string, List<string>> CurrentOptions(string mod)
         => OptionPicker.Starting(_mod(mod)?.Groups ?? Array.Empty<GroupInfo>(), SavedOptions(mod), Races.CodesFor(_game.Player().RaceCode), _body());
+
+    public int? CustomizeNow(string key)
+        => _keptCustomize.TryGetValue(key, out var value) ? value : null;
+
+    /// <summary> The character's hairstyle, face and tail numbers as last read (with the kept outfit). </summary>
+    private Dictionary<string, int> _keptCustomize = new(StringComparer.Ordinal);
+
+    public string? RingOn(Hands hand)
+    {
+        // the mod whose item is on that finger: the one the closet put there, or one of the part's own items
+        var slot = hand == Hands.Left ? "LFinger" : "RFinger";
+        var item = _keptItems.GetValueOrDefault(slot);
+        var mods = Showing.In(_kept, Socket.Rings);
+        if (item == 0 || mods.Count == 0)
+            return null;
+        foreach (var mod in mods)
+        {
+            var part = _part(new PartKey(mod, Socket.Rings));
+            if (_settings.Worn.TryGetValue(mod, out var record) && record.PutOnItems.TryGetValue(slot, out var put) && put == item
+             || part is not null && (part.Items.Any(i => i.Id == item) || part.Versions.Any(i => i.Id == item)))
+                return mod;
+        }
+
+        return null;
+    }
+
+    public IReadOnlyDictionary<string, List<string>> FittedOptions(string mod)
+        => OptionPicker.Starting(_mod(mod)?.Groups ?? Array.Empty<GroupInfo>(), null, Races.CodesFor(_game.Player().RaceCode), _body());
+
+    public bool OptionsSaved(string mod)
+        => SavedOptions(mod) is not null;
 
     public int VersionShowing(PartKey part)
     {
@@ -380,10 +412,17 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             if (GlamourerState.ItemIn(state, slot.Name) is var id and not 0)
                 items[slot.Name] = id;
 
-        if (Showing.Same(showing, _kept) && items.Count == _keptItems.Count && items.All(kv => _keptItems.GetValueOrDefault(kv.Key) == kv.Value))
+        var numbers = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var key in new[] { "Hairstyle", "Face", "TailShape" })
+            if (state?["Customize"]?[key]?["Value"] is JValue { Type: JTokenType.Integer } v)
+                numbers[key] = Convert.ToInt32(v.Value);
+
+        if (Showing.Same(showing, _kept) && items.Count == _keptItems.Count && items.All(kv => _keptItems.GetValueOrDefault(kv.Key) == kv.Value)
+         && numbers.Count == _keptCustomize.Count && numbers.All(kv => _keptCustomize.GetValueOrDefault(kv.Key, -1) == kv.Value))
             return;
-        _kept      = showing;
-        _keptItems = items;
+        _kept          = showing;
+        _keptItems     = items;
+        _keptCustomize = numbers;
         Version++;
     }
 
@@ -403,6 +442,13 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         _settingsRead = DateTime.UtcNow;
         if (_ipc.CollectionForObject(PlayerIndex) is not { } collection)
             return;
+
+        // the temporary settings other plugins hold in the collection (a Glamourer design's mods, a sync plugin): they
+        // go over the collection's own while they last, also in priority, so what the closet puts on must beat them too
+        if (_ipc.AllSettings(collection, ignoreTemporary: false) is { } effective)
+            OthersTemporary = effective.Where(kv => kv.Value.Item5 && !_previewMods.Contains(kv.Key, StringComparer.OrdinalIgnoreCase)
+                    && !_previewOff.Contains(kv.Key, StringComparer.OrdinalIgnoreCase))
+                .ToDictionary(kv => kv.Key, kv => (kv.Value.Item1, kv.Value.Item2), StringComparer.OrdinalIgnoreCase);
 
         if (_ipc.AllSettings(collection, ignoreTemporary: true) is { } all)
         {
@@ -439,9 +485,21 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         => Settings.TryGetValue(mod, out var s) && s.Enabled;
 
     /// <summary> Highest priority among the other enabled mods. </summary>
-    public int TopPriority(string? except = null)
-        => Settings.Where(kv => kv.Value.Enabled && (except is null || !kv.Key.Equals(except, StringComparison.OrdinalIgnoreCase)))
-            .Select(kv => kv.Value.Priority).DefaultIfEmpty(0).Max();
+    public int TopPriority(string? except = null, IReadOnlyCollection<string>? alsoExcept = null)
+        => WearRules.TopPriority(Settings.Select(kv => (kv.Key, kv.Value.Enabled, kv.Value.Priority)),
+            OthersTemporary.Select(kv => (kv.Key, kv.Value.Enabled, kv.Value.Priority)),
+            m => except is not null && m.Equals(except, StringComparison.OrdinalIgnoreCase)
+              || alsoExcept is not null && alsoExcept.Contains(m, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Temporary settings other plugins hold in the player's collection (mod directory → enabled, priority), not the
+    /// closet's own try. While they last they are what counts for those mods.
+    /// </summary>
+    public Dictionary<string, (bool Enabled, int Priority)> OthersTemporary { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary> Whether a mod is on and at which priority as Penumbra uses it now (another plugin's temporary setting first). </summary>
+    public (bool Enabled, int Priority) Effective(string mod)
+        => OthersTemporary.TryGetValue(mod, out var t) ? t : Settings.TryGetValue(mod, out var s) ? (s.Enabled, s.Priority) : (false, 0);
 
     // ---- what to put on ----
 
@@ -462,7 +520,9 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             foreach (var r in group.Where(r => r.Nothing))
             {
                 var part = _part(r.Key);
-                off.Add(new TakeOffItem(group.Key, name, r.Key.Socket, part?.SlotIds ?? GearSlots.NamesOf(r.Key.Socket).Select(n => GearSlots.IdOf(n)!.Value).ToArray()));
+                var slots = part?.SlotIds ?? GearSlots.NamesOf(r.Key.Socket).Select(n => GearSlots.IdOf(n)!.Value).ToArray();
+                // a ring taken off one hand: that finger only
+                off.Add(new TakeOffItem(group.Key, name, r.Key.Socket, r.Key.Socket == Socket.Rings ? WearRules.FingerSlots(slots, r.Hand) : slots));
             }
 
             var tried = group.Where(r => !r.Nothing).ToList();
@@ -482,7 +542,8 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
                 if (part.Versions.Count > 0)
                 {
                     var item = part.Versions[Math.Clamp(r.Version, 0, part.Versions.Count - 1)];
-                    foreach (var slotId in part.SlotIds)
+                    // a ring goes on the finger asked for (the other hand keeps what it wears)
+                    foreach (var slotId in r.Key.Socket == Socket.Rings ? WearRules.FingerSlots(part.SlotIds, r.Hand) : part.SlotIds)
                         picks.Add((slotId, item.Id));
                 }
 
@@ -495,7 +556,8 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
                 }
             }
 
-            wear.Add(new DressItem(group.Key, name, options, picks, customize, sockets));
+            var under = tried.SelectMany(r => r.Under ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            wear.Add(new DressItem(group.Key, name, options, picks, customize, sockets, under.Count > 0 ? under : null));
         }
 
         return (wear, off);
@@ -509,7 +571,7 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         Report("trying on", "taking off", requests);
         if (!Ready(out var why))
         {
-            Fail(why);
+            Fail(why, "trying on: not ready");
             return;
         }
 
@@ -518,7 +580,8 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             var code = _ipc.GetState(PlayerIndex, out var look);
             if (code != Ipc.GlamourerSuccess || string.IsNullOrEmpty(look))
             {
-                Fail(code == Ipc.GlamourerInvalidKey ? Loc.T("Your Glamourer state is locked by another plugin.") : Loc.T("Glamourer could not read your look."));
+                Fail(code == Ipc.GlamourerInvalidKey ? Loc.T("Your Glamourer state is locked by another plugin.") : Loc.T("Glamourer could not read your look."),
+                    $"trying on: Glamourer gave no look (code {code})");
                 return;
             }
 
@@ -543,9 +606,10 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             return;
         }
 
-        // Above every enabled mod, so the tried mods win all conflicts.
+        // Above every enabled mod, so the tried mods win all conflicts: the collection's priorities and the temporary ones
+        // other plugins hold (a Glamourer design's body, say), read at most a few seconds ago
         RefreshSettings();
-        var priority = Math.Max(_settings.TemporaryPriority, TopPriority() + 1);
+        var priority = WearRules.TryPriority(_settings.TemporaryPriority, TopPriority());
         _previewCollection = collection;
         _touched.Add(collection);
         var failed   = new List<string>();
@@ -557,12 +621,18 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             if (r is not (Ipc.PenumbraSuccess or Ipc.PenumbraNothingChanged))
             {
                 failed.Add(item.Name);
+                Said($"trying on: Penumbra refused a mod (code {r})");
                 continue;
             }
 
             _previewMods.Add(item.Mod);
             if (PutOn(item).Problem is { Length: > 0 } problem)
+            {
                 problems.Add(problem);
+                Said(item.Customize.Count == 0 && item.Sockets.Any(GearSlots.IsCustomization)
+                    ? "trying on: a hair, face or tail part with no number for this character"
+                    : "trying on: Glamourer did not take all of it");
+            }
         }
 
         // a slot something tried was just put in keeps it (a ring tried on the hand another ring is taken off from)
@@ -575,7 +645,8 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         if (_previewMods.Count == 0 && tookOff == 0)
         {
             EndPreview();
-            Fail(failed.Count > 0 ? Loc.F("Penumbra could not put on {0}.", string.Join(", ", failed)) : Loc.T("That could not be tried on."));
+            Fail(failed.Count > 0 ? Loc.F("Penumbra could not put on {0}.", string.Join(", ", failed)) : Loc.T("That could not be tried on."),
+                "trying on: nothing could be tried, the try ended");
             return;
         }
 
@@ -603,6 +674,14 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
                 if (GearSlots.ByName(slot) is { } gear && !tried.Contains(gear.Id))
                     any |= _ipc.SetItem(PlayerIndex, gear.Id, GearSlots.NothingItem(gear.Id)) is Ipc.GlamourerSuccess or Ipc.GlamourerNothingDone;
             return any;
+        }
+
+        // Penumbra switches a mod on or off as a whole: while another part of it is worn, it stays on (the closet does not
+        // ask for this; a take-off from elsewhere is left out, and said once)
+        if (_kept.Any(kv => kv.Key != item.Socket && kv.Value.Contains(item.Mod, StringComparer.OrdinalIgnoreCase)))
+        {
+            Said("trying on: a part of a mod with other parts worn was not taken off");
+            return false;
         }
 
         if (_ipc.SetTemporaryModOff(PlayerIndex, item.Mod, priority) is not (Ipc.PenumbraSuccess or Ipc.PenumbraNothingChanged))
@@ -696,7 +775,11 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
 
         var owner = _game.PlayerKey();
         _ipc.GetState(PlayerIndex, out var lookBefore);
-        var dirs  = wear.Select(w => w.Mod).Concat(off.Select(o => o.Mod)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        // an upper layer whose priority may be raised over a kept body is journaled too (one with settings of its own only:
+        // an inherited one is never written)
+        var raised = wear.SelectMany(w => w.Under ?? Array.Empty<string>())
+            .Where(m => Settings.TryGetValue(m, out var u) && u.Enabled && !u.Inherited && !OthersTemporary.ContainsKey(m));
+        var dirs  = wear.Select(w => w.Mod).Concat(off.Select(o => o.Mod)).Concat(raised).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var entry = _journal.Begin(step, description, collection, owner, Journal.Snapshot(Settings, dirs), lookBefore, dirs);
         var problems = new List<string>();
 
@@ -707,10 +790,11 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         if (off.Count > 0)
             RefreshSettings(force: true);
 
-        var worn = new List<DressItem>();
+        var worn  = new List<DressItem>();
+        var notes = new List<string>();
         for (var i = 0; i < wear.Count; ++i)
         {
-            if (WearOne(wear[i], collection, owner) is { Length: > 0 } problem)
+            if (WearOne(wear[i], collection, owner, notes) is { Length: > 0 } problem)
                 problems.Add(problem);
             else
                 worn.Add(wear[i]);
@@ -731,6 +815,8 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
 
         if (problems.Count > 0)
             Fail(string.Join(" ", problems));
+        else if (notes.Count > 0)
+            Note(notes[0]);
     }
 
     /// <summary>
@@ -754,15 +840,19 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             }
 
         foreach (var w in worn)
+        {
             foreach (var (slotId, itemId) in w.Picks)
                 if (GearSlots.NameOf(slotId) is { } slot)
                     _keptItems[slot] = itemId;
+            foreach (var (key, value) in w.Customize)
+                _keptCustomize[key] = value;
+        }
         _kept = kept.Where(kv => kv.Value.Count > 0).ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value);
         Version++;
     }
 
     /// <returns> A sentence about what went wrong, "" when it went through. </returns>
-    private string WearOne(DressItem item, Guid collection, string owner)
+    private string WearOne(DressItem item, Guid collection, string owner, List<string> notes)
     {
         // Record the mod's settings and what you wear in its slots before its first Keep (or again if the record is stale:
         // the mod was turned off elsewhere meanwhile, or it was kept on another character). A mod kept part by part keeps
@@ -804,11 +894,37 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             return Loc.F("Penumbra could not turn on {0}.", item.Name);
 
         var now      = Settings.TryGetValue(item.Mod, out var s) ? s.Priority : 0;
-        var top      = TopPriority(item.Mod);
-        var smart    = PriorityAdvisor?.Invoke(item.Mod, item.Sockets, now);
+        var under    = item.Under ?? Array.Empty<string>();
+        var top      = TopPriority(item.Mod, under);
+        var smart    = PriorityAdvisor?.Invoke(item.Mod, item.Sockets, now, under);
         var priority = smart ?? (now > top ? now : top + 1);
+        var raise    = new List<(string Mod, int Priority)>();
+        if (under.Count > 0)
+        {
+            // a body kept under the skin that is on (makeup over a face's textures): the skin's settings are not written;
+            // only its priority, and only when it has settings of its own and is not above the body already
+            var floor = PriorityAdvisor?.Invoke(item.Mod, item.Sockets, int.MinValue, under) ?? top + 1;
+            // one held by another plugin's temporary setting counts with that priority, and is left alone like an
+            // inherited one: a priority written into the collection would not change what shows
+            var over  = under.Where(m => Effective(m).Enabled)
+                .Select(m => (m, Effective(m).Priority, OthersTemporary.ContainsKey(m) || Settings.TryGetValue(m, out var u) && u.Inherited)).ToList();
+            (priority, raise, var held) = WearRules.UnderLayers(now, floor, over);
+            if (held is not null)
+            {
+                notes.Add(OthersTemporary.ContainsKey(held)
+                    ? Loc.F("{0} is kept just under {1}: another plugin holds the settings of {1} for now and they are left as they are, so another mod may still show over {0}.",
+                        item.Name, NameOf(held))
+                    : Loc.F("{0} is kept just under {1}: the settings of {1} come from another collection and are left as they are, so another mod may still show over {0}.",
+                        item.Name, NameOf(held)));
+                Said("keeping: a lower layer held under an inherited upper layer");
+            }
+        }
+
         if (priority != now)
             _ipc.TrySetPriority(collection, item.Mod, priority);
+        foreach (var (mod, to) in raise)
+            if (_ipc.TrySetPriority(collection, mod, to) is not (Ipc.PenumbraSuccess or Ipc.PenumbraNothingChanged))
+                Said("keeping: Penumbra refused to raise an upper layer");
 
         foreach (var (group, chosen) in item.Options)
             _ipc.TrySetSettings(collection, item.Mod, group, chosen);
@@ -1105,10 +1221,31 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         return why.Length == 0;
     }
 
-    private void Fail(string message)
+    /// <summary> A sentence for the status line that is no error (what a Keep could not do the usual way). </summary>
+    private void Note(string message)
+    {
+        Message = new WardrobeMessage(message, false, Message.Serial + 1, DateTime.UtcNow);
+        Version++;
+    }
+
+    private void Fail(string message, string? kind = null)
     {
         Message = new WardrobeMessage(message, true, Message.Serial + 1, DateTime.UtcNow);
         Version++;
+        if (kind is not null)
+            Said(kind);
+    }
+
+    private readonly HashSet<string> _said = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A failure into the log file, once a session per kind, in fixed words and Penumbra's or Glamourer's code: never a mod
+    /// name (the status line has the whole sentence for the user).
+    /// </summary>
+    private void Said(string kind)
+    {
+        if (_said.Add(kind))
+            _log.Information($"Mod Closet 2: wardrobe: {kind}");
     }
 
     /// <summary> Moves remembered data when Penumbra renames a mod directory. </summary>

@@ -138,10 +138,12 @@ public static class Words
         Add(Pieces.Hair, "", 1f, "hair", "hairstyle", "hairstyles", "ponytail", "ponytails", "braid", "braids", "bangs", "bun", "buns",
             "pigtails", "twintails", "updo", "wig", "haare", "haar", "frisur", "zopf", "mohawk", "dreadlocks", "dreads", "locks", "curls",
             "hairdo", "fringe", "sidecut", "undercut");
-        Add(Pieces.Face, "", 1f, "face", "makeup", "lashes", "eyelashes", "brows", "eyebrows", "eyes", "eye", "iris", "irises", "freckles",
-            "lips", "lipstick", "blush", "eyeliner", "eyeshadow", "mascara", "sculpt", "sclera", "catchlight", "teeth", "fangs",
-            "gesicht", "augen", "wimpern", "augenbrauen", "sommersprossen", "schminke", "lash", "pupils", "contacts", "facepaint",
-            "liner", "lipgloss", "beard", "stubble", "moustache", "mustache", "whiskers", "snout", "muzzle");
+        Add(Pieces.Face, "", 1f, "face", "sculpt", "teeth", "fangs", "gesicht", "beard", "stubble", "moustache", "mustache", "whiskers",
+            "snout", "muzzle");
+        // Paint on the face (brief: makeup and sculpts apart): makeup, eyes, brows, lashes, decals, freckles of the face.
+        Add(Pieces.Makeup, "", 1f, "makeup", "lashes", "eyelashes", "brows", "eyebrows", "eyes", "eye", "iris", "irises", "freckles",
+            "lips", "lipstick", "blush", "eyeliner", "eyeshadow", "mascara", "sclera", "catchlight", "augen", "wimpern", "augenbrauen",
+            "sommersprossen", "schminke", "lash", "pupils", "contacts", "facepaint", "liner", "lipgloss", "decal", "decals");
         Add(Pieces.Ears, "", 1f, "ears", "kemonomimi", "mimi", "catears", "foxears", "bunnyears", "wolfears", "dogears", "ohren", "elfears");
         Add(Pieces.Ears, "", 0.6f, "ear");
         Add(Pieces.Tail, "", 1f, "tail", "tails", "schwanz", "schweif", "sippo");

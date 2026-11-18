@@ -49,8 +49,23 @@ public sealed partial class WindowFace
             if (label.Length > 0)
                 items.Add((Loc.T(label), null, P(26)));
             foreach (var row in inGroup)
+            {
+                // the left-hand rings share the right-hand rings' row (one row, two halves)
+                if (row.Id == Pieces.RingsLeft && inGroup.Any(x => x.Id == Pieces.Rings))
+                    continue;
                 items.Add((null, row, P(32)));
+            }
         }
+
+        // a little short of room (a shelf or two more than fit): the rows close up (no gap, each row a little lower,
+        // labels a little tighter) before the list has to scroll
+        var full    = items.Sum(i => i.H);
+        var rowsN   = items.Count(i => i.Row is not null);
+        var labelsN = items.Count(i => i.Label is not null && i.Label != ColoursId);
+        var spare   = rowsN * P(4) + labelsN * P(6);
+        var squeeze = spare > 0 ? Math.Clamp((full - upperBox.H) / spare, 0, 1) : 0;
+        if (squeeze > 0)
+            items = items.Select(i => (i.Label, i.Row, i.Row is not null ? i.H - P(4) * squeeze : i.Label is not null && i.Label != ColoursId ? i.H - P(6) * squeeze : i.H)).ToList();
 
         var contentH = items.Sum(i => i.H);
         var view     = new Rect(r.X, upperBox.Y, r.W - 1, upperBox.H);
@@ -65,8 +80,10 @@ public sealed partial class WindowFace
                     ColoursEntry(new Rect(inner.X, y, inner.W, P(44)), oc);
                 else if (label is not null)
                     Painter.TextIn(_c, new Rect(inner.X + P(8), y + P(8), inner.W - P(16), P(14)), label, Theme.Label, Theme.Muted);
+                else if (row is not null && row.Id == Pieces.Rings && rows.FirstOrDefault(x => x.Id == Pieces.RingsLeft) is { } left)
+                    RailRingsWide(row, left, new Rect(inner.X, y, inner.W, Math.Min(P(30), h)));
                 else if (row is not null)
-                    RailRowWide(row, new Rect(inner.X, y, inner.W, P(30)));
+                    RailRowWide(row, new Rect(inner.X, y, inner.W, Math.Min(P(30), h)));
             }
 
             y += h;
@@ -154,6 +171,71 @@ public sealed partial class WindowFace
         _slimSearch = false;
         if (_s.Selected != row.Id)
             _s.Select(row.Id);
+    }
+
+    /// <summary>
+    /// The rings as one row with two halves: "Rings", then "Right 18" and "Left 12" as two small filters, each
+    /// selectable (the selected one marked like a selected row). The row's thumb is the ring that is on.
+    /// </summary>
+    private void RailRingsWide(RailRow right, RailRow left, Rect r)
+    {
+        Stats.RailRowsDrawn++;
+        Stats.Places["rail-row/" + Pieces.Rings] = r;
+        var worn  = right.WornName.Length > 0 ? right : left;
+        var thumb = new Rect(r.X + P(8), r.Center.Y - P(12), P(24), P(24));
+        if (worn.WornName.Length > 0)
+        {
+            if (string.IsNullOrEmpty(worn.WornPicture) || !_c.Picture(worn.WornPicture, thumb, P(6)))
+            {
+                _c.FillRect(thumb, Theme.Tint(worn.WornName), P(6));
+                Painter.Icon(_c, right.Icon, thumb.Center, P(14), Theme.Text, 1.8f);
+            }
+        }
+        else
+        {
+            _c.StrokeRect(thumb, Theme.EdgeStrong, P(6), Math.Max(1, _u), Corners.All, P(3), P(2));
+            Painter.Icon(_c, right.Icon, thumb.Center, P(14), Theme.Muted, 1.8f);
+        }
+
+        // the two halves at the row's end, each with its count
+        var halves = new[] { (right, Loc.T("Right")), (left, Loc.T("Left")) };
+        var widths = halves.Select(h => _c.Measure(h.Item2, Theme.SmallBold).X + P(6) + _c.Measure(Num(h.Item1.Count), Theme.Small).X + P(16)).ToArray();
+        var x      = r.Right - P(4) - widths.Sum() - P(4);
+        var name   = Loc.T("Rings");
+        var nameX  = thumb.Right + P(10);
+        var any    = IsPicked(right) || IsPicked(left);
+        Painter.TextIn(_c, new Rect(nameX, r.Y, Math.Max(0, x - P(8) - nameX), r.H), name, Theme.BodyMedium, any ? Theme.Accent : Theme.Text);
+        for (var i = 0; i < halves.Length; ++i)
+        {
+            var (row, label) = halves[i];
+            var box  = new Rect(x, r.Y + P(3), widths[i], r.H - P(6));
+            var id   = "rail/" + row.Id;
+            Stats.Places[id] = box;
+            var resp = _ui.Interact(id, box);
+            var drop = false;
+            if (CanDrop(row.Id))
+            {
+                var (over, dropped) = _ui.DropTarget(box);
+                drop = over;
+                if (dropped && _ui.Drag?.Payload is Card card)
+                    Drop(card, row.Id);
+            }
+
+            var picked = IsPicked(row);
+            if (drop)
+                _c.StrokeRect(box, Theme.Accent, P(7), P(1.5f), Corners.All, P(4), P(3));
+            else if (picked)
+                _c.FillRect(box, Theme.Picked, P(7));
+            else if (resp.Hovered)
+                _c.FillRect(box, Theme.HoverWash, P(7));
+            var lw = _c.Measure(label, picked ? Theme.SmallBold : Theme.Small).X;
+            Painter.TextIn(_c, new Rect(box.X + P(8), box.Y, lw, box.H), label, picked ? Theme.SmallBold : Theme.Small, picked ? Theme.Accent : Theme.Text);
+            Painter.TextIn(_c, new Rect(box.X + P(8) + lw + P(6), box.Y, box.W - P(16) - lw - P(6), box.H), Num(row.Count), Theme.Small, Theme.Muted);
+            _ui.Tip(id, box, row.WornName.Length > 0 ? Loc.F("{0}: {1}", row.Name, row.WornName) : row.Name);
+            if (resp.Clicked)
+                PickShelf(row);
+            x += widths[i];
+        }
     }
 
     private void RailRowWide(RailRow row, Rect r)
@@ -323,6 +405,12 @@ public sealed partial class WindowFace
             _c.StrokeRect(box, Theme.Accent, P(9), P(1.5f), Corners.All, P(4), P(3));
         var fg = picked || drop ? Theme.Accent : row.Id == Pieces.ToSort ? Theme.Gold : resp.Hovered ? Theme.Text : Theme.Muted;
         Painter.Icon(_c, row.Icon, row.Id == ColoursId ? box.Center - new Vector2(0, P(4)) : box.Center, P(18), fg, 1.7f);
+        if (row.Id is Pieces.Rings or Pieces.RingsLeft)
+        {
+            // which hand: its first letter in the tile's corner ("R", "L")
+            var hand = Loc.T(row.Id == Pieces.Rings ? "Right" : "Left")[..1];
+            Painter.TextIn(_c, new Rect(box.X + P(4), box.Bottom - P(15), P(12), P(13)), hand, Theme.Label, fg);
+        }
         if (row.WornName.Length > 0 && row.Group != PieceGroup.Bottom)
         {
             if (row.WornMore > 0)

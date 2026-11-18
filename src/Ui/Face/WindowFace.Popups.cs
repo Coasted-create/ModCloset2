@@ -34,6 +34,9 @@ public sealed partial class WindowFace
                 case PopOwnMod when _ui.PopupContext is PartKey ownOf:
                     OwnModPanel(ownOf);
                     break;
+                case PopSaveLook:
+                    SaveLookPanel();
+                    break;
                 case PopSettings:
                     SettingsMenu();
                     break;
@@ -97,6 +100,8 @@ public sealed partial class WindowFace
             items.Add(new MenuItem("move", Loc.T("Move to")) { Sub = targets, Icon = Icons.Move });
             if (card.OwnMod)
                 items.Add(new MenuItem("ownmod", Loc.T("Make it its own mod…")) { Icon = Icons.Copy });
+            if (card.OneHand != Hands.Both)
+                items.Add(new MenuItem("ownhand", card.OneHand == Hands.Right ? Loc.T("Wear through the left ring slot (as a copy)…") : Loc.T("Wear through the right ring slot (as a copy)…")) { Icon = Icons.Copy });
 
             if (WornWithKey(card.Key) is { } w && w.Options.Count > 0)
             {
@@ -140,6 +145,9 @@ public sealed partial class WindowFace
                 case "ownmod":
                     OpenOwnMod(card.Key);
                     break;
+                case "ownhand":
+                    OpenOwnMod(card.Key, card.OneHand == Hands.Right ? Hands.Left : Hands.Right);
+                    break;
                 case "why":
                     _ui.OpenPopup(PopWhy, anchor, new WhyContext(card, _s.WhyHere(card.Key)));
                     break;
@@ -170,8 +178,18 @@ public sealed partial class WindowFace
 
     // ---- options on the "Wearing" strip ----
 
+    /// <summary>
+    /// A group's choices as menu rows; a group the closet fits to the body starts with "Automatic" (ticked while nobody
+    /// chose by hand; its choices are then not ticked).
+    /// </summary>
     private static List<MenuItem> ChoiceItems(OptionChip option, string prefix)
-        => option.Choices.Select((c, i) => new MenuItem(prefix + i, c) { Checked = option.On.Contains(c), KeepOpen = option.Multi }).ToList();
+    {
+        var items = new List<MenuItem>();
+        if (option.Fits)
+            items.Add(new MenuItem(prefix + "auto", Loc.T("Automatic")) { Checked = option.Automatic });
+        items.AddRange(option.Choices.Select((c, i) => new MenuItem(prefix + i, c) { Checked = !option.Automatic && option.On.Contains(c), KeepOpen = option.Multi }));
+        return items;
+    }
 
     private void SetChoice(WearingInfo w, OptionChip option, int index)
     {
@@ -185,7 +203,7 @@ public sealed partial class WindowFace
 
         // a multi-choice menu stays open: show the new state at once (the session's lists come back on its next version)
         if (option.Multi && _ui.PopupContext is ValueTuple<WearingInfo, OptionChip>)
-            _ui.OpenPopup(PopOption, _ui.PopupAnchor, (w, new OptionChip { Group = option.Group, Choices = option.Choices, On = on, Multi = true }));
+            _ui.OpenPopup(PopOption, _ui.PopupAnchor, (w, new OptionChip { Group = option.Group, Choices = option.Choices, On = on, Multi = true, Fits = option.Fits }));
     }
 
     private void OptionMenu(WearingInfo w, OptionChip option)
@@ -196,7 +214,9 @@ public sealed partial class WindowFace
         var items = new List<MenuItem> { MenuItem.Header(option.Group) };
         items.AddRange(ChoiceItems(option, "choice:"));
         var picked = Menu.Draw(_ui, PopOption, _ui.PopupAnchor, items, 160);
-        if (picked is not null && int.TryParse(picked.Id.AsSpan(7), out var i))
+        if (picked?.Id == "choice:auto")
+            _s.SetOption(w.Key, option.Group, null);
+        else if (picked is not null && int.TryParse(picked.Id.AsSpan(7), out var i))
             SetChoice(w, option, i);
     }
 
@@ -258,6 +278,13 @@ public sealed partial class WindowFace
         }
 
         var cut = picked.Id.IndexOf(':');
+        if (picked.Id.StartsWith('c') && cut > 1 && picked.Id.EndsWith(":auto", StringComparison.Ordinal) && int.TryParse(picked.Id.AsSpan(1, cut - 1), out var ai)
+         && ai < chips.Count && chips[ai].Option is { } autoOption)
+        {
+            _s.SetOption(w.Key, autoOption.Group, null);
+            return;
+        }
+
         if (picked.Id.StartsWith('c') && cut > 1 && int.TryParse(picked.Id.AsSpan(1, cut - 1), out var gi) && int.TryParse(picked.Id.AsSpan(cut + 1), out var ci)
          && gi < chips.Count && chips[gi].Option is { } option)
             SetChoice(w, option, ci);

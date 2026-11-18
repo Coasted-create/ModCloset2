@@ -267,6 +267,27 @@ public static partial class GamePaths
             _               => GearSlot(slot) is var s && s != Socket.None ? s : null,
         };
 
+    /// <summary> The ring finger a slot name names: 'r' for "rfinger", 'l' for "lfinger", else null. </summary>
+    public static char? Finger(string slot)
+        => slot switch
+        {
+            "rfinger" => 'r',
+            "lfinger" => 'l',
+            _         => null,
+        };
+
+    /// <summary> The ring finger a game path is for, by its file name ("…_rir.mdl", "mt_…_ril_a.mtrl"), else null. </summary>
+    public static char? FingerOfPath(string gamePath)
+    {
+        var name = gamePath[(gamePath.LastIndexOf('/') + 1)..];
+        var r = RingSuffix().Match(name);
+        return r.Success ? r.Groups[1].Value[0] : null;
+    }
+
+    // c0201a0001_rir.mdl, mt_c0201a0001_rir_a.mtrl, v01_c0201a0001_ril_d.tex
+    [GeneratedRegex(@"(?:^|_)c\d{4}a\d{4}_ri([rl])[_.]")]
+    private static partial Regex RingSuffix();
+
     /// <summary> Penumbra's equip slot names ("Body", "Hands", "RFinger"…), lower case, to sockets. </summary>
     public static Socket GearSlot(string slot)
         => slot switch

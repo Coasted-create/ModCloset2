@@ -433,12 +433,13 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     /// <summary> The parts not worn (animations, effects…): on when their mod is on. </summary>
     private readonly Dictionary<PartKey, LibPart> _notWorn = new();
 
+    /// <summary> The parts of a shelf; a ring shelf: those for its hand (<see cref="RingView"/>). </summary>
     private IReadOnlyList<LibPart> ShelfParts(string shelf)
-        => _buckets.TryGetValue(shelf, out var bucket) ? bucket.List : NoParts;
+        => IsRingShelf(shelf) ? RingView(shelf) : _buckets.TryGetValue(shelf, out var bucket) ? bucket.List : NoParts;
 
     /// <summary> How many things a shelf holds (the same thing through several slots counts once). </summary>
     private int ShelfCount(string shelf)
-        => _buckets.TryGetValue(shelf, out var bucket) ? bucket.Things(_thingParts).Things : 0;
+        => IsRingShelf(shelf) ? Things(RingView(shelf)).Count : _buckets.TryGetValue(shelf, out var bucket) ? bucket.Things(_thingParts).Things : 0;
 
     // ======== things: the same thing of one mod through several slots ========
     //
@@ -701,7 +702,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     private static readonly TimeSpan MoveShows = TimeSpan.FromSeconds(3);
 
     private int ShelfStamp(string shelf)
-        => _buckets.TryGetValue(shelf, out var bucket) ? bucket.Stamp : -1;
+        => _buckets.TryGetValue(shelf == Pieces.RingsLeft ? Pieces.Rings : shelf, out var bucket) ? bucket.Stamp : -1;
 
     private Bucket BucketOf(string shelf)
         => _buckets.TryGetValue(shelf, out var bucket) ? bucket : _buckets[shelf] = new Bucket();
@@ -1134,12 +1135,41 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         var on = new HashSet<PartKey>();
         foreach (var socket in ShowingSockets)
             foreach (var mod in _wardrobe.ShowingIn(socket))
-                if (_byMod.TryGetValue(mod, out var parts) && parts.FirstOrDefault(p => p.Key.Socket == socket) is { } part && _wardrobe.IsOn(part.Key))
+                if (_byMod.TryGetValue(mod, out var parts) && parts.FirstOrDefault(p => p.Key.Socket == socket) is { } part && _wardrobe.IsOn(part.Key)
+                 && NumberShows(part))
                     on.Add(part.Key);
         foreach (var key in _notWorn.Keys)
             if (_wardrobe.IsOn(key))
                 on.Add(key);
         return on;
+    }
+
+    /// <summary>
+    /// A part picked by a number (hair, face, tail, ears) is on only when the character has a number its mod replaces: a
+    /// mod that is on for its other parts (a head piece), or files of a tail number the character does not wear, show
+    /// nothing of it. Its card then tries it (with its number) instead of saying "on".
+    /// </summary>
+    private bool NumberShows(LibPart part)
+    {
+        if (Game.GearSlots.CustomizeKey(part.Key.Socket) is not { } key)
+            return true;
+        IReadOnlyCollection<int>? numbers = part.CustomizeChoices.TryGetValue(key, out var all) ? all.ToList()
+            : part.Customize.TryGetValue(key, out var one) ? new[] { one } : null;
+        return Wear.WearRules.NumberShows(numbers, _wardrobe.CustomizeNow(key));
+    }
+
+    /// <summary>
+    /// Another part of this part's mod is on (Penumbra switches a mod on or off as a whole: this part cannot come off
+    /// alone unless it is gear, whose slot can be emptied). The other part's shelf, or null.
+    /// </summary>
+    private string? WornWith(PartKey part, IReadOnlyCollection<PartKey>? alsoOff = null)
+    {
+        if (GearIsSocket(part.Socket) || !_byMod.TryGetValue(part.Mod, out var parts))
+            return null;
+        foreach (var other in parts)
+            if (other.Key != part && _on.Contains(other.Key) && alsoOff?.Contains(other.Key) != true)
+                return _shelfOf.GetValueOrDefault(other.Key, Pieces.Other);
+        return null;
     }
 
     private void RebuildView()
@@ -1209,9 +1239,19 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         }
         else if (_chipsFor != (_selected, ShelfStamp(_selected), Loc.Version))
         {
-            _kinds    = _buckets.TryGetValue(_selected, out var chipBucket) && chipBucket.Things(_thingParts) is var things
-                ? Chips(things.Things, things.Kinds)
-                : Array.Empty<KindChip>();
+            if (IsRingShelf(_selected))
+            {
+                var ringThings = Things(RingView(_selected));
+                _kinds = Chips(ringThings.Count, ringThings.Where(p => p.Info.Kind.Length > 0).GroupBy(p => p.Info.Kind.ToLowerInvariant())
+                    .ToDictionary(g => g.Key, g => g.Count()));
+            }
+            else
+            {
+                _kinds = _buckets.TryGetValue(_selected, out var chipBucket) && chipBucket.Things(_thingParts) is var things
+                    ? Chips(things.Things, things.Kinds)
+                    : Array.Empty<KindChip>();
+            }
+
             _chipsFor = (_selected, ShelfStamp(_selected), Loc.Version);
         }
 
@@ -1253,7 +1293,18 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         }
 
         var onHere = searching || _selected is Pieces.Outfits or Pieces.ToSort or Pieces.Hidden ? new List<LibPart>() : OnIn(_selected);
-        _wearingAll = onHere.Select(p => MakeWearing(p)!).ToList();
+        // what is tried on this shelf comes first: the strip is about it (its options change the try) until the try ends; a
+        // worn part it stands in for (the same socket) is left out meanwhile
+        var triedHere = new List<(LibPart Part, TryEntry Try)>();
+        if (!searching && _selected is not (Pieces.Outfits or Pieces.ToSort or Pieces.Hidden))
+            foreach (var t in _tries)
+                if (!t.Nothing && _byKey.TryGetValue(t.Key, out var tp) && _shelfOf.TryGetValue(t.Key, out var ts) && TriedOn(t, ts, _selected))
+                    triedHere.Add((tp, t));
+        var wearing = triedHere.Select(t => MakeWearing(t.Part, t.Try)!).ToList();
+        foreach (var p in onHere)
+            if (!triedHere.Any(t => t.Part.Key == p.Key || SameSocket(t.Part.Key.Socket, p.Key.Socket) && (p.Key.Socket != Socket.Rings || IsRingShelf(_selected))))
+                wearing.Add(MakeWearing(p)!);
+        _wearingAll = wearing;
         _wearing    = _wearingAll.FirstOrDefault();
         _trying  = MakeTrying();
         _scan    = MakeScan();
@@ -1266,8 +1317,15 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     /// </summary>
     private List<LibPart> OnIn(string shelf)
     {
-        if (!_onByShelf.TryGetValue(shelf, out var parts))
+        // a ring shelf: what is on its finger
+        if (!_onByShelf.TryGetValue(IsRingShelf(shelf) ? Pieces.Rings : shelf, out var parts))
             return new List<LibPart>();
+        if (IsRingShelf(shelf))
+        {
+            var hand = HandOfShelf(shelf);
+            parts = parts.Where(p => p.Key.Socket != Socket.Rings ? shelf == Pieces.Rings : OnFinger(p, hand)).ToList();
+        }
+
         int Rank(LibPart part)
         {
             var showing = _wardrobe.ShowingIn(part.Key.Socket);
@@ -1416,8 +1474,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             PieceName  = ShelfName(shelf),
             Icon       = ShelfIcon(shelf),
             KindName   = Label(part, shelf),
-            State      = thing.Any(p => _tries.Any(t => !t.Nothing && t.Key == p.Key)) ? CardState.Trying
-                : thing.Any(p => _on.Contains(p.Key)) ? CardState.On : CardState.None,
+            State      = CardStateOf(thing),
             IsNew      = Usage.IsNew(click.Mod.Since, Use(click), now),
             Versions   = click.VersionCount,
             Slots      = thing.Count,
@@ -1425,8 +1482,21 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             Moved      = thing.Any(p => _data.Moves.TryGetValue(p.KeyText, out var moved) && moved != p.Info.Piece && IsHome(moved)),
             Unsure     = thing.Any(p => _waitingSet.Contains(p.Key)),
             OwnMod     = OffersOwnMod(thing),
+            OneHand    = thing.Count == 1 && thing[0].Key.Socket == Socket.Rings ? HandsOf(thing[0]) : Hands.Both,
             CopyOf     = CopyName(part.Mod.Directory),
         };
+    }
+
+    /// <summary>
+    /// Tried, on or neither. On a ring shelf a ring counts for that shelf's finger only (a ring on the right hand is not on
+    /// the left hand's shelf).
+    /// </summary>
+    private CardState CardStateOf(IReadOnlyList<LibPart> thing)
+    {
+        var hand = _search.Trim().Length == 0 ? HandOfShelf(_selected) : Hands.Both;
+        if (thing.Any(p => _tries.Any(t => !t.Nothing && t.Key == p.Key && (p.Key.Socket != Socket.Rings || HasHand(t.Hand, hand)))))
+            return CardState.Trying;
+        return thing.Any(p => p.Key.Socket == Socket.Rings ? OnFinger(p, hand) : _on.Contains(p.Key)) ? CardState.On : CardState.None;
     }
 
     /// <summary> The card's quiet label: what tells two same-named mods apart, and what tells a mod's things apart. </summary>
@@ -1559,6 +1629,12 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     private bool Matches(LibPart part)
         => _shelfOf.TryGetValue(part.Key, out var shelf) && shelf != Pieces.Hidden && SearchText.Matches(_hitsWords, Haystacks()[part.Key]);
 
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<LibPart, SearchText.NameKey> _nameKeys = new();
+
+    /// <summary> A part's name as the search ranking reads it, made once per part. </summary>
+    private SearchText.NameKey NameKeyOf(LibPart part)
+        => _nameKeys.GetValue(part, static p => SearchText.KeyOf(p.Name));
+
     private IReadOnlyList<Card> SearchCards(DateTime now)
     {
         var query = SearchText.Words(_search);
@@ -1604,6 +1680,26 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             result.AddRange(plainNamed);
             result.AddRange(Order(special.Where(p => !InName(p)), now));
             result.AddRange(plainRest);
+
+            // a name that is the query, or starts with it, comes first; then names with the query as whole words; each
+            // tier in the order above ("rue+" finds the body mod Rue+ before the 234 "… for Rue+")
+            var squashed = SearchText.Squash(_search);
+            var tiers    = new List<LibPart>[3] { new(), new(), new() };
+            var rest     = new List<LibPart>(result.Count);
+            foreach (var part in result)
+            {
+                var tier = InName(part) ? SearchText.NameRank(NameKeyOf(part), squashed, query) : 3;
+                (tier < 3 ? tiers[tier] : rest).Add(part);
+            }
+
+            if (rest.Count != result.Count)
+            {
+                result = new List<LibPart>(result.Count);
+                foreach (var tier in tiers)
+                    result.AddRange(tier);
+                result.AddRange(rest);
+            }
+
             _searchOrdered    = result;
             _searchOrderedFor = (_hitsStamp, _orderStamp, _placeStamp);
         }
@@ -1631,31 +1727,35 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         return chips;
     }
 
-    private WearingInfo? MakeWearing(LibPart? part)
+    private WearingInfo? MakeWearing(LibPart? part, TryEntry? tried = null)
     {
         if (part is null)
             return null;
 
-        var current = _wardrobe.CurrentOptions(part.Mod.Directory);
+        // a try: the options it is sent with (number picks included); else what the mod shows with now
+        var current = tried is not null ? RequestOptions(tried) ?? OptionsNow(part.Mod.Directory) : OptionsNow(part.Mod.Directory);
+        var hand    = HandChoices(part.Mod.Directory);
         var options = new List<OptionChip>();
-        foreach (var name in part.Info.Groups)
+        foreach (var group in OfferedGroups(part))
         {
-            if (part.Mod.Groups.FirstOrDefault(g => g.Name == name) is not { } group || group.IsBody || group.IsRace || group.Options.Count < 2 && !group.Multi)
-                continue;
+            var fits = IsFit(group);
             options.Add(new OptionChip
             {
-                Group   = group.Name,
-                Choices = group.Options.Select(o => o.Name).ToList(),
-                On      = current.TryGetValue(group.Name, out var on) ? on : group.DefaultChoice(),
-                Multi   = group.Multi,
+                Group     = group.Name,
+                Choices   = group.Options.Select(o => o.Name).ToList(),
+                On        = current.TryGetValue(group.Name, out var on) ? on : group.DefaultChoice(),
+                Multi     = group.Multi,
+                Fits      = fits,
+                Automatic = fits && !hand.ContainsKey(group.Name),
             });
         }
 
-        var version = _wardrobe.VersionShowing(part.Key);
+        var version = tried?.Version ?? _wardrobe.VersionShowing(part.Key);
         if (version < 0)
             version = _data.Versions.GetValueOrDefault(part.Key.ToString());
         return new WearingInfo
         {
+            Trying   = tried is not null,
             Key      = part.Key,
             Name     = part.Name,
             Picture  = PictureOf(part),
@@ -1686,10 +1786,13 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         var extras = new List<TryItem>();
         if (_tries.LastOrDefault(t => !t.Nothing) is { } newest && _byKey.TryGetValue(newest.Key, out var part))
         {
+            // in a layered socket a part of the other layer stays: skin textures go over the body, the body under the skin
             if (Replaced(newest.Key) is { } replaced)
-                note = _shelfOf.GetValueOrDefault(replaced.Key) == _shelfOf.GetValueOrDefault(part.Key)
-                    ? Loc.F("replaces {0}", replaced.Name)
-                    : Loc.F("takes the place of {0} (same slot)", replaced.Name);
+                note = Layered(part.Key.Socket) && LayerOf(replaced.Key) != LayerOf(part.Key)
+                    ? OverLayer(LayerOf(part.Key)) ? Loc.F("goes over {0}", replaced.Name) : Loc.F("goes under {0}", replaced.Name)
+                    : _shelfOf.GetValueOrDefault(replaced.Key) == _shelfOf.GetValueOrDefault(part.Key)
+                        ? Loc.F("replaces {0}", replaced.Name)
+                        : Loc.F("takes the place of {0} (same slot)", replaced.Name);
 
             if (_byMod.TryGetValue(part.Mod.Directory, out var siblings))
                 foreach (var other in siblings)
@@ -1726,18 +1829,27 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         };
     }
 
-    /// <summary> The kept part that a tried part takes the place of (another mod's part on in the same socket), or null. </summary>
+    /// <summary>
+    /// The kept part that a tried part takes the place of (another mod's part on in the same socket), or null. In a layered
+    /// socket the one on the tried part's own shelf first; else one of the other layer, which stays (the note says over or
+    /// under).
+    /// </summary>
     private LibPart? Replaced(PartKey tried)
     {
+        LibPart? other = null;
         foreach (var mod in _wardrobe.ShowingIn(tried.Socket))
         {
             if (mod.Equals(tried.Mod, StringComparison.OrdinalIgnoreCase))
                 continue;
             if (_byMod.TryGetValue(mod, out var parts) && parts.FirstOrDefault(p => p.Key.Socket == tried.Socket) is { } part)
-                return part;
+            {
+                if (!Layered(tried.Socket) || SameLayer(part.Key, tried))
+                    return part;
+                other ??= part;
+            }
         }
 
-        return null;
+        return other;
     }
 
     private string NameOf(PartKey key)
@@ -1745,6 +1857,26 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
 
     private static bool SameSocket(Socket a, Socket b)
         => a == b && a != Socket.None;
+
+    /// <summary>
+    /// Layered sockets: one part per shelf is on at once, each showing its own files: in the body a body mod (Bodies) and
+    /// skin textures (Skin) over it; in the face's textures the face's own (Face) and makeup (Makeup) over them. Two parts
+    /// of one shelf still replace each other; elsewhere one mod wins the socket.
+    /// </summary>
+    private static bool Layered(Socket socket)
+        => socket is Socket.BodyBase or Socket.FaceTextures;
+
+    /// <summary> The upper layer of a layered socket (skin textures over a body, makeup over a face's textures). </summary>
+    private static bool OverLayer(string shelf)
+        => shelf is Pieces.Skin or Pieces.Makeup;
+
+    /// <summary> The shelf a part is on (after the user's moves), placed or not. </summary>
+    private string LayerOf(PartKey key)
+        => _shelfOf.TryGetValue(key, out var shelf) ? shelf : PartOf(key) is { } part ? NaturalShelf(part) : Pieces.Other;
+
+    /// <summary> Two parts take each other's place in a try: the same socket, and in a layered socket the same shelf too. </summary>
+    private bool SameLayer(PartKey a, PartKey b)
+        => SameSocket(a.Socket, b.Socket) && (!Layered(a.Socket) || LayerOf(a) == LayerOf(b));
 
     // ---- To sort ----
 
@@ -2071,7 +2203,9 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             var socket = gear.Socket;
             LibPart? part = null;
             var trying = false;
-            if (_tries.LastOrDefault(t => SameSocket(t.Key.Socket, socket)) is { } tried)
+            // a ring tried on one finger shows on that finger only
+            var finger = socket != Socket.Rings ? Hands.Both : gear.Id == Wear.WearRules.LeftRingId ? Hands.Left : Hands.Right;
+            if (_tries.LastOrDefault(t => SameSocket(t.Key.Socket, socket) && (socket != Socket.Rings || HasHand(t.Hand, finger))) is { } tried)
             {
                 trying = true;
                 part   = tried.Nothing ? null : PartOf(tried.Key);
@@ -2086,9 +2220,19 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
                     }
             }
 
-            // a ring goes on the hands its item goes on (the right one when nothing says)
-            if (part is not null && socket == Socket.Rings && !OnHand(part, gear.Id, slot))
+            // a ring goes on the hands its item goes on (the right one when nothing says); a kept one is where the wardrobe
+            // says it is, when it can tell
+            if (part is not null && socket == Socket.Rings && !trying)
+            {
+                if (_wardrobe.RingOn(finger) is { } ringMod)
+                    part = PartOf(new PartKey(ringMod, Socket.Rings));
+                else if (!OnHand(part, gear.Id, slot))
+                    part = null;
+            }
+            else if (part is not null && socket == Socket.Rings && !OnHand(part, gear.Id, slot) && HandOfTry(part.Key) == Hands.Both)
+            {
                 part = null;
+            }
 
             if (part is not null)
             {
@@ -2132,6 +2276,10 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
                 return part;
         return null;
     }
+
+    /// <summary> The finger a part is tried on (<see cref="Hands.Both"/> when it is not tried, or not on one finger). </summary>
+    private Hands HandOfTry(PartKey key)
+        => _tries.FirstOrDefault(t => !t.Nothing && t.Key == key)?.Hand ?? Hands.Both;
 
     private static bool OnHand(LibPart ring, byte slotId, int slot)
         => ring.SlotIds.Count > 0 ? ring.SlotIds.Contains(slotId) : slot == 8;
@@ -2208,6 +2356,9 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         public bool Nothing { get; init; }
         public Dictionary<string, List<string>>? Options { get; set; }
         public int Version { get; set; }
+
+        /// <summary> A ring: the finger it is tried on (or taken off); <see cref="Hands.Both"/> for anything else. </summary>
+        public Hands Hand { get; set; }
     }
 
     private readonly List<TryEntry> _tries = new();
@@ -2246,10 +2397,21 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             part = ClickPart(several).Key;
 
         // clicking the card being tried, or the card that is on, does nothing (SPEC "Trying on"); the face takes a tried
-        // card out with StopTrying
-        if (_tries.Any(t => !t.Nothing && t.Key == part))
+        // card out with StopTrying. A ring tried on one hand and clicked on the other hand's shelf moves to that hand.
+        var hand = _byKey.TryGetValue(part, out var clicked) ? TryHand(clicked) : Hands.Both;
+        if (_tries.FirstOrDefault(t => !t.Nothing && t.Key == part) is { } already)
+        {
+            if (part.Socket == Socket.Rings && already.Hand != hand)
+            {
+                _tries.RemoveAll(t => t != already && t.Key.Socket == Socket.Rings && HasHand(t.Hand, hand));
+                already.Hand = hand;
+                PreviewTries();
+            }
+
             return;
-        if (_on.Contains(part))
+        }
+
+        if (part.Socket == Socket.Rings ? clicked is not null && OnFinger(clicked, hand) : _on.Contains(part))
         {
             // the kept part while something else is tried in its place: back to the kept one
             if (_tries.RemoveAll(t => SameSocket(t.Key.Socket, part.Socket)) > 0)
@@ -2273,8 +2435,11 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     {
         // what is tried in its slot, and the same thing tried through another slot, make room
         var lead = LeadOf(part);
-        _tries.RemoveAll(t => SameSocket(t.Key.Socket, part.Socket) || !t.Nothing && t.Key != part && LeadOf(t.Key) == lead);
-        _tries.Add(new TryEntry { Key = part, Version = _data.Versions.GetValueOrDefault(part.ToString()) });
+        // a ring makes room on its own finger only: the other hand keeps what is tried there
+        var hand = part.Socket == Socket.Rings && _byKey.TryGetValue(part, out var ring) ? TryHand(ring) : Hands.Both;
+        _tries.RemoveAll(t => SameLayer(t.Key, part) && (part.Socket != Socket.Rings || HasHand(t.Hand, hand))
+         || !t.Nothing && t.Key != part && LeadOf(t.Key) == lead);
+        _tries.Add(new TryEntry { Key = part, Version = _data.Versions.GetValueOrDefault(part.ToString()), Hand = hand });
         UseOf(part).TriedUtc = _now();
     }
 
@@ -2304,24 +2469,39 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
 
         // The body and its skin are not taken off with one click: that is the body mod (Rue, Bibo…) that every outfit is
         // made for, and it would go for every character using the collection.
-        if (piece == Pieces.Skin)
+        if (piece is Pieces.Skin or Pieces.Bodies)
         {
             SetStatus(Loc.T("The body cannot be taken off here. Turn it off in Penumbra if you mean to."), false);
             return;
         }
 
         var parts = ShelfParts(piece);
-        var on = parts.Where(p => _on.Contains(p.Key) && p.Key.Socket != Socket.BodyBase).ToList();
+        // a ring shelf: what is on its finger only (the other hand keeps its ring)
+        var hand = HandOfShelf(piece);
+        var on = parts.Where(p => (p.Key.Socket == Socket.Rings ? OnFinger(p, hand) : _on.Contains(p.Key)) && p.Key.Socket != Socket.BodyBase).ToList();
         if (on.Count == 0)
         {
             SetStatus(Loc.T("Nothing is on here."), false);
             return;
         }
 
+        // a part that is not gear, whose mod is also worn for another part, stays: Penumbra turns a mod on or off as a whole
+        var stays = on.Where(p => WornWith(p.Key) is not null).ToList();
+        if (stays.Count > 0)
+        {
+            on.RemoveAll(p => stays.Contains(p));
+            var first = stays[0];
+            SetStatus(Loc.F("{0} stays on: its mod is also worn on {1}, and Penumbra turns a mod on or off only as a whole.", first.Name,
+                ShelfName(WornWith(first.Key)!)), false);
+            if (on.Count == 0)
+                return;
+        }
+
         foreach (var p in on)
         {
-            _tries.RemoveAll(t => SameSocket(t.Key.Socket, p.Key.Socket));
-            _tries.Add(new TryEntry { Key = p.Key, Nothing = true });
+            var finger = p.Key.Socket == Socket.Rings ? hand : Hands.Both;
+            _tries.RemoveAll(t => SameLayer(t.Key, p.Key) && (p.Key.Socket != Socket.Rings || HasHand(t.Hand, finger)));
+            _tries.Add(new TryEntry { Key = p.Key, Nothing = true, Hand = finger });
         }
 
         PreviewTries();
@@ -2341,7 +2521,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     }
 
     private static TryRequest Request(TryEntry t)
-        => new(t.Key, t.Nothing, t.Options, t.Version);
+        => new(t.Key, t.Nothing, t.Options, t.Version, t.Hand);
 
     /// <summary>
     /// What a try or a Keep sends to the wardrobe: the tries, and for each tried thing a take-off of every other slot of it,
@@ -2353,9 +2533,34 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     /// - A slot another tried part is put in is left to that part, except the ring slot: its two fingers are two places, and
     ///   a ring tried on one hand does not take the thing off the other (in a try the tried ring keeps its finger).
     /// </summary>
-    private List<TryRequest> TryRequests()
+    private List<TryRequest> TryRequests(bool keep = false)
     {
-        var list = _tries.Select(Request).ToList();
+        // a mod with nothing saved is put on with the closet's pick; body and race choices made by hand go over it
+        // (and a hair, face, tail or ear part is put on with the choice that replaces the number it shows with)
+        var list = _tries.Select(t => Request(t) with { Options = RequestOptions(t) }).ToList();
+
+        // layered sockets: what goes on is put on in layer order (a body before skin textures, a face's textures before
+        // makeup): later is higher in Penumbra. A body tried must not end up above the skin the user wears (when no other
+        // skin is tried with it): in a try that skin goes on again after the body (temporary settings, gone after the
+        // try); at Keep the body carries it as Under, and the wardrobe puts the body under it without keeping the skin
+        var lower = list.Where(r => !r.Nothing && Layered(r.Key.Socket) && !OverLayer(LayerOf(r.Key))).ToList();
+        if (lower.Count > 0)
+        {
+            var overTried = list.Where(r => !r.Nothing && Layered(r.Key.Socket) && OverLayer(LayerOf(r.Key))).Select(r => r.Key.Socket).ToHashSet();
+            foreach (var r in lower.Where(r => !overTried.Contains(r.Key.Socket)))
+            {
+                var overs = _on.Where(k => k.Socket == r.Key.Socket && OverLayer(LayerOf(k)) && list.All(q => q.Key != k))
+                    .OrderBy(k => k.Mod, StringComparer.OrdinalIgnoreCase).ToList();
+                if (overs.Count == 0)
+                    continue;
+                if (keep)
+                    list[list.IndexOf(r)] = r with { Under = overs.Select(k => k.Mod).ToList() };
+                else
+                    list.AddRange(overs.Select(k => new TryRequest(k)));
+            }
+
+            list = list.OrderBy(r => !r.Nothing && Layered(r.Key.Socket) && OverLayer(LayerOf(r.Key)) ? 1 : 0).ToList();
+        }
         foreach (var t in _tries)
         {
             if (t.Nothing)
@@ -2368,13 +2573,26 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         return list;
     }
 
-    public void SetOption(PartKey part, string group, IReadOnlyList<string> on)
+    /// <param name="on">
+    /// The choices to have on; null for a body or race group: "automatic", the closet's own pick for the player's body and
+    /// race again (the hand choice is forgotten).
+    /// </param>
+    public void SetOption(PartKey part, string group, IReadOnlyList<string>? on)
     {
         Sync();
+        if (on is null || _byKey.TryGetValue(part, out var lib) && FitGroup(lib.Mod, group) is not null)
+        {
+            if (!_byKey.TryGetValue(part, out var fitted) || FitGroup(fitted.Mod, group) is null)
+                return;
+            RememberFit(fitted, group, on);
+            on ??= NumberPicks(fitted).TryGetValue(group, out var number) ? number
+                : _wardrobe.FittedOptions(part.Mod).TryGetValue(group, out var pick) ? pick : FitGroup(fitted.Mod, group)!.DefaultChoice();
+        }
+
         if (_tries.FirstOrDefault(t => !t.Nothing && t.Key.Mod.Equals(part.Mod, StringComparison.OrdinalIgnoreCase)) is { } tried)
         {
             // the mod is being tried: the option changes the try (every tried part of the mod shares the options)
-            var options = tried.Options ?? Copy(_wardrobe.CurrentOptions(part.Mod));
+            var options = Copy(RequestOptions(tried) ?? OptionsNow(part.Mod));
             options[group] = on.ToList();
             foreach (var t in _tries.Where(t => !t.Nothing && t.Key.Mod.Equals(part.Mod, StringComparison.OrdinalIgnoreCase)))
                 t.Options = options;
@@ -2383,8 +2601,13 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         }
 
         if (!_on.Contains(part))
+        {
+            // a hand choice for a part that is neither on nor tried is remembered for its next try; the lists show it
+            Changed();
             return;
-        var kept = Copy(_wardrobe.CurrentOptions(part.Mod));
+        }
+
+        var kept = Copy(OptionsNow(part.Mod));
         kept[group] = on.ToList();
         var step = Guid.NewGuid();
         _wardrobe.SetOptions(step, Loc.F("Options of {0}", NameOf(part)), part, kept);
@@ -2395,6 +2618,202 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
 
     private static Dictionary<string, List<string>> Copy(IReadOnlyDictionary<string, List<string>> options)
         => options.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
+
+    // ======== options: the mod's own, and the body and race choices the closet makes ========
+
+    /// <summary> A body or race group of the mod (one the closet picks to fit the player), or null. </summary>
+    private static GroupInfo? FitGroup(LibMod mod, string group)
+        => mod.Groups.FirstOrDefault(g => g.Name == group && IsFit(g));
+
+    /// <summary> A group the closet picks for the player: body, race, or which hair, face, tail or ear number the mod replaces. </summary>
+    private static bool IsFit(GroupInfo group)
+        => group.IsBody || group.IsRace || NumberSocket(group) is not null;
+
+    private static readonly Socket[] NumberSockets = { Socket.Hair, Socket.Face, Socket.Tail, Socket.EarShape };
+
+    /// <summary>
+    /// A single-choice group whose choices replace different hair, face, tail or ear numbers ("Face 1 / Face 2 / Face 3"):
+    /// the socket whose number it picks, else null.
+    /// </summary>
+    private static Socket? NumberSocket(GroupInfo group)
+    {
+        if (group.Multi || group.Options.Count < 2)
+            return null;
+        foreach (var socket in NumberSockets)
+        {
+            var sets = group.Options.Select(o => o.Numbers.TryGetValue(socket, out var n) ? n : null).Where(n => n is { Count: > 0 }).ToList();
+            if (sets.Count >= 2 && sets.Select(n => string.Join(",", n!.Order())).Distinct().Count() >= 2)
+                return socket;
+        }
+
+        return null;
+    }
+
+    /// <summary> The number socket of a part (makeup counts for the face it is on). </summary>
+    private static Socket? NumberSocketOf(Socket socket)
+        => socket switch
+        {
+            Socket.Hair or Socket.Face or Socket.Tail or Socket.EarShape => socket,
+            Socket.FaceTextures                                         => Socket.Face,
+            _                                                           => null,
+        };
+
+    /// <summary>
+    /// The number a part shows with once tried: the character's own when the mod replaces it (the try keeps it), else the
+    /// mod's first for the player (the try sets it): as the wardrobe's <see cref="PartBuilder.PickCustomize"/>.
+    /// </summary>
+    private int? NumberTarget(LibPart part, Socket socket)
+    {
+        if (Game.GearSlots.CustomizeKey(socket) is not { } key)
+            return null;
+        var now  = _wardrobe.CustomizeNow(key);
+        var mine = part.CustomizeChoices.TryGetValue(key, out var all) ? all : null;
+        if (now is { } n && (mine is null || mine.Contains(n) || !part.Customize.ContainsKey(key)))
+            return n;
+        return part.Customize.TryGetValue(key, out var first) ? first : now;
+    }
+
+    /// <summary>
+    /// For each group of the part's mod that picks the part's number and has no hand choice: the choice that replaces the
+    /// number the part will show with (the face the character wears, say), when there is one. Empty: nothing to pick.
+    /// </summary>
+    private Dictionary<string, List<string>> NumberPicks(LibPart part)
+    {
+        var picks = new Dictionary<string, List<string>>();
+        if (NumberSocketOf(part.Key.Socket) is not { } socket || NumberTarget(part, socket) is not { } target)
+            return picks;
+        var hand = HandChoices(part.Mod.Directory);
+        foreach (var group in part.Mod.Groups)
+            if (NumberSocket(group) == socket && !hand.ContainsKey(group.Name)
+             && group.Options.FirstOrDefault(o => o.Numbers.TryGetValue(socket, out var n) && n.Contains(target)) is { } fit)
+                picks[group.Name] = new List<string> { fit.Name };
+        return picks;
+    }
+
+    /// <summary> The options a try is sent with: its own, else the hand choices over what is saved, with the number picks over both. </summary>
+    private IReadOnlyDictionary<string, List<string>>? RequestOptions(TryEntry t)
+    {
+        if (t.Nothing)
+            return t.Options;
+        var options = t.Options ?? (IReadOnlyDictionary<string, List<string>>?)HandOver(t.Key.Mod);
+        if (!_byKey.TryGetValue(t.Key, out var part) || NumberPicks(part) is not { Count: > 0 } picks)
+            return options;
+        var result = Copy(options ?? _wardrobe.CurrentOptions(t.Key.Mod));
+        foreach (var (group, on) in picks)
+            result[group] = on;
+        return result;
+    }
+
+    /// <summary>
+    /// A part picked by a number kept with options that replace another number than the one it shows with: it is on, but
+    /// nothing of it shows (a sculpt for face 2 on a character with face 3).
+    /// </summary>
+    private bool ShowsWith(LibPart part, IReadOnlyDictionary<string, List<string>> options)
+    {
+        if (NumberSocketOf(part.Key.Socket) is not { } socket || NumberTarget(part, socket) is not { } target)
+            return true;
+        foreach (var group in part.Mod.Groups)
+            if (NumberSocket(group) == socket && options.TryGetValue(group.Name, out var on)
+             && !group.Options.Where(o => on.Contains(o.Name)).Any(o => o.Numbers.TryGetValue(socket, out var n) && n.Contains(target)))
+                return false;
+        return true;
+    }
+
+    /// <summary> A group worth offering: two choices or more, or several at once. </summary>
+    private static bool Offerable(GroupInfo group)
+        => group.Name.Length > 0 && (group.Options.Count >= 2 || group.Multi);
+
+    /// <summary>
+    /// The option groups the wearing strip offers for a part. A body mod (its body part): every group, body and race
+    /// groups included, in the mod's order: they are its main choices (sizes, body type, variants per race). Anything
+    /// else: the part's own groups first, then the body and race groups the closet picks to fit the player (marked so).
+    /// </summary>
+    private static List<GroupInfo> OfferedGroups(LibPart part)
+    {
+        var groups = part.Mod.Groups;
+        if (part.Key.Socket == Socket.BodyBase)
+            return groups.Where(Offerable).ToList();
+
+        var own = new List<GroupInfo>();
+        foreach (var name in part.Info.Groups)
+            if (groups.FirstOrDefault(g => g.Name == name) is { } group && !IsFit(group) && Offerable(group) && !own.Contains(group))
+                own.Add(group);
+        foreach (var group in groups)
+            if (IsFit(group) && Offerable(group) && !own.Contains(group) && Touches(group, part))
+                own.Add(group);
+        return own;
+    }
+
+    /// <summary> A group changes this part: the part's groups name it, or its files are for the part's socket. </summary>
+    private static bool Touches(GroupInfo group, LibPart part)
+        => part.Info.Groups.Contains(group.Name) || group.Sockets.Any(s => s is not (Socket.Other or Socket.None) && Game.GamePaths.SameFamily(s, part.Key.Socket));
+
+    /// <summary>
+    /// A body or race group of an offered option: <c>Fits</c> (the closet picks it to fit the player's body and race),
+    /// and <c>Automatic</c> (no hand choice is remembered: the closet's pick is used); the same as the strip's
+    /// <see cref="OptionChip.Fits"/> and <see cref="OptionChip.Automatic"/>, for any group asked about.
+    /// </summary>
+    public (bool Fits, bool Automatic) OptionState(PartKey part, string group)
+    {
+        Sync();
+        if (!_byKey.TryGetValue(part, out var lib) || FitGroup(lib.Mod, group) is null)
+            return (false, false);
+        return (true, !HandChoices(lib.Mod.Directory).ContainsKey(group));
+    }
+
+    /// <summary> The body and race choices made by hand for a mod (over all its parts), group → choice. </summary>
+    private Dictionary<string, List<string>> HandChoices(string mod)
+    {
+        var result = new Dictionary<string, List<string>>();
+        if (_data.FitChoices.Count == 0 || !_byMod.TryGetValue(mod, out var parts))
+            return result;
+        foreach (var part in parts)
+            if (_data.FitChoices.TryGetValue(part.KeyText, out var choices))
+                foreach (var (group, on) in choices)
+                    if (FitGroup(part.Mod, group) is { } g && on.All(c => g.Options.Any(o => o.Name == c)))
+                        result[group] = on;
+        return result;
+    }
+
+    /// <summary> Remembers a hand choice for a body or race group (on the part), or forgets it everywhere in the mod (null). </summary>
+    private void RememberFit(LibPart part, string group, IReadOnlyList<string>? on)
+    {
+        if (_byMod.TryGetValue(part.Mod.Directory, out var parts))
+            foreach (var p in parts)
+                if (_data.FitChoices.TryGetValue(p.KeyText, out var choices) && choices.Remove(group) && choices.Count == 0)
+                    _data.FitChoices.Remove(p.KeyText);
+        if (on is not null)
+        {
+            if (!_data.FitChoices.TryGetValue(part.KeyText, out var mine))
+                _data.FitChoices[part.KeyText] = mine = new Dictionary<string, List<string>>();
+            mine[group] = on.ToList();
+        }
+
+        _save();
+    }
+
+    /// <summary>
+    /// The options a mod shows with now: a try's own, else what is saved, else the closet's pick with the hand choices over
+    /// it (a body or race choice made by hand wins over the closet's pick until "automatic").
+    /// </summary>
+    private IReadOnlyDictionary<string, List<string>> OptionsNow(string mod)
+    {
+        if (_tries.FirstOrDefault(t => !t.Nothing && t.Options is not null && t.Key.Mod.Equals(mod, StringComparison.OrdinalIgnoreCase)) is { Options: { } tried })
+            return tried;
+        return HandOver(mod) ?? _wardrobe.CurrentOptions(mod);
+    }
+
+    /// <summary> The closet's pick with the hand choices over it, when the mod has nothing saved and hand choices exist; else null. </summary>
+    private Dictionary<string, List<string>>? HandOver(string mod)
+    {
+        var hand = HandChoices(mod);
+        if (hand.Count == 0 || _wardrobe.OptionsSaved(mod))
+            return null;
+        var options = Copy(_wardrobe.CurrentOptions(mod));
+        foreach (var (group, on) in hand)
+            options[group] = on.ToList();
+        return options;
+    }
 
     public void SetVersion(PartKey part, int index)
     {
@@ -2440,8 +2859,13 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         var now  = _now();
         var name = _trying.Name.Length > 0 ? _trying.Name : NameOf(_tries[0].Key);
         var step = Guid.NewGuid();
-        _wardrobe.Keep(step, Loc.F("Keep {0}", name), TryRequests());
+        var requests = TryRequests(keep: true);
+        _wardrobe.Keep(step, Loc.F("Keep {0}", name), requests);
         _resolving = (step, _tries.ToList());
+        // a hair, face, tail or ear part kept with options for another number than the one it shows with: it is on, and
+        // stays on, but nothing of it shows; the status line says so instead of "Kept"
+        var unseen = requests.Where(r => !r.Nothing && _byKey.TryGetValue(r.Key, out var kp)
+            && !ShowsWith(kp, r.Options ?? _wardrobe.CurrentOptions(r.Key.Mod))).Select(r => NameOf(r.Key)).FirstOrDefault();
         foreach (var t in _tries.Where(t => !t.Nothing))
             Usage.Kept(UseOf(t.Key), now);
         _orderStamp++;
@@ -2452,7 +2876,8 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         PushUndo(new UndoEntry { Step = step, What = name, OutfitStep = true, Restore = RestoreColours(colours) });
         _keeping.Add(new PendingKeep(step, _lookTry, colours));
         _lookTry = null;
-        SetStatus(_tries.All(t => t.Nothing) ? Loc.F("Took off {0}.", name) : Loc.F("Kept {0}.", name), false);
+        SetStatus(unseen is not null ? Loc.F("{0} is on, but it does not show on your character with the options chosen: pick another option above.", unseen)
+            : _tries.All(t => t.Nothing) ? Loc.F("Took off {0}.", name) : Loc.F("Kept {0}.", name), false);
         _tries.Clear();
         _save();
         Changed();
@@ -2608,6 +3033,10 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     public LookKept? LastKept
         => _lastKept;
 
+    /// <summary> A sentence of the looks (what a save did) on the status line, as the closet's own. </summary>
+    public void Say(string text)
+        => SetStatus(text, false);
+
     /// <summary> Works without a sync (the looks follow the outfit with no face open). </summary>
     private void RefreshOutfit()
     {
@@ -2641,24 +3070,29 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
                 continue;
 
             // a body mod's model in the body or legs slot (nothing worn there) is no piece of that slot: only a part of its
-            // own socket counts, and a body mod has none there
-            var found = false;
+            // own socket counts, and a body mod has none there. Where several mods are on together (a body and skin, several
+            // face paints), every one of them; elsewhere the one that shows.
+            var layered = Layered(socket);
+            var found   = false;
+            var shelves = new HashSet<string>(StringComparer.Ordinal);
             foreach (var mod in _wardrobe.ShowingIn(socket))
                 if (PartOf(new PartKey(mod, socket)) is { FitsMe: true } part && !StrayOfCopy(part))
                 {
-                    list.Add(new WornPart(part.Key, NaturalShelf(part), Copy(_wardrobe.CurrentOptions(mod)), _wardrobe.VersionShowing(part.Key)));
+                    // the one that shows first wins its shelf (in a layered socket each shelf has its own)
+                    var shelf = NaturalShelf(part);
+                    if (layered && !shelves.Add(shelf))
+                        continue;
+                    list.Add(new WornPart(part.Key, shelf, Copy(_wardrobe.CurrentOptions(mod)), _wardrobe.VersionShowing(part.Key)));
                     found = true;
-                    break;
+                    if (!layered)
+                        break;
                 }
 
-            // a body mod whose files cannot show now (dressed) is still on: the first one that is
-            if (!found && socket == Socket.BodyBase)
+            // a body mod whose files cannot show now (dressed) is still on: the first one that is, on each shelf still free
+            if ((layered || !found) && socket == Socket.BodyBase)
                 foreach (var key in _notWorn.Keys.Where(k => k.Socket == Socket.BodyBase).OrderBy(k => k.Mod, StringComparer.OrdinalIgnoreCase))
-                    if (_wardrobe.IsOn(key) && PartOf(key) is { FitsMe: true } body)
-                    {
+                    if (list.All(w => w.Key != key) && _wardrobe.IsOn(key) && PartOf(key) is { FitsMe: true } body && shelves.Add(NaturalShelf(body)))
                         list.Add(new WornPart(body.Key, NaturalShelf(body), Copy(_wardrobe.CurrentOptions(body.Mod.Directory)), -1));
-                        break;
-                    }
         }
 
         return list;
@@ -2709,14 +3143,16 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
                     options[group] = on.ToList();
             }
 
-            _tries.RemoveAll(t => SameSocket(t.Key.Socket, p.Key.Socket));
+            // in a layered socket a part takes the place of a tried part of its own shelf only (a body and skin together)
+            _tries.RemoveAll(t => t.Key == p.Key || SameLayer(t.Key, p.Key));
             _tries.Add(new TryEntry { Key = p.Key, Options = options, Version = p.Version >= 0 ? p.Version : _data.Versions.GetValueOrDefault(p.Key.ToString()) });
             UseOf(p.Key).TriedUtc = _now();
         }
 
         // what the look wants empty comes off as the Nothing tile does it (never the body itself)
+        // (a look's take-off of a part whose mod is also worn for another part is left out, as for "Nothing")
         foreach (var off in look.TakeOff)
-            if (off.Socket != Socket.BodyBase && !_tries.Any(t => SameSocket(t.Key.Socket, off.Socket)))
+            if (off.Socket != Socket.BodyBase && !_tries.Any(t => SameLayer(t.Key, off)) && WornWith(off, look.TakeOff.ToList()) is null)
                 _tries.Add(new TryEntry { Key = off, Nothing = true });
 
         if (look.Colours is { } colours && ColourTry is { } colourTry)
@@ -2908,6 +3344,9 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     public void Move(PartKey part, string piece)
     {
         Sync();
+        // the left hand's rings are a view of the rings' shelf
+        if (piece == Pieces.RingsLeft)
+            piece = Pieces.Rings;
         if (piece == Pieces.Hidden)
         {
             Hide(part);

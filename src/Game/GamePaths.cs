@@ -139,6 +139,26 @@ public static partial class GamePaths
     /// (face files that are not models are <see cref="Socket.FaceTextures"/>), skin textures as <see cref="Socket.BodyBase"/>,
     /// weapons as <see cref="Socket.MainHand"/>, anything else <see cref="Socket.Other"/>.
     /// </summary>
+    /// <summary>
+    /// The number a hair, face, tail or ear file is for (h0145 → hair 145; face textures count for the face), or null for
+    /// any other file. The socket is the one the number is picked for: Hair, Face, Tail or EarShape.
+    /// </summary>
+    public static (Socket Socket, int Number)? NumberOf(string gamePath)
+    {
+        var human = HumanRegex().Match(Normalize(gamePath));
+        if (!human.Success)
+            return null;
+        var socket = human.Groups[2].Value switch
+        {
+            "hair" => Socket.Hair,
+            "face" => Socket.Face,
+            "tail" => Socket.Tail,
+            "zear" => Socket.EarShape,
+            _      => Socket.None,
+        };
+        return socket == Socket.None ? null : (socket, int.Parse(human.Groups[3].Value));
+    }
+
     public static Socket SocketOf(string gamePath)
     {
         var p = Normalize(gamePath);

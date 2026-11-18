@@ -578,6 +578,7 @@ public static partial class Decision
             RaceCodes   = new List<int>(),
             Groups      = p.Groups.ToList(),
             Models      = Math.Max(1, p.ModelSets.Count),
+            Hands       = HandsOf(p),
         };
 
         info.Kind = jewellery ? "piercing"
@@ -589,6 +590,27 @@ public static partial class Decision
         if (folder.Speaks)
             info.Evidence.Add(Evidence(folder));
         return info;
+    }
+
+    /// <summary>
+    /// A ring-slot part: the fingers it has files for, from what any of the mod's options changes (so a ring whose left
+    /// finger comes with an option that is off counts as both: it can be worn on the left). Older facts without the
+    /// finger list fall back to the kept paths.
+    /// </summary>
+    public static Hands HandsOf(PartFacts p)
+    {
+        if (p.Socket != Socket.Rings)
+            return Hands.Both;
+        var models = p.Paths.Where(x => x.EndsWith(".mdl", StringComparison.Ordinal)).ToList();
+        var fingers = p.Fingers.Length > 0 ? p.Fingers
+            : string.Concat((models.Any(x => GamePaths.FingerOfPath(x) is not null) ? models : p.Paths)
+                .Select(GamePaths.FingerOfPath).Where(c => c is not null).Select(c => c!.Value).Distinct().Order());
+        return fingers switch
+        {
+            "r" => Hands.Right,
+            "l" => Hands.Left,
+            _   => Hands.Both,
+        };
     }
 
     /// <summary> The kind of something only on the back: what the part's whole names say (wings, bag), else none. </summary>

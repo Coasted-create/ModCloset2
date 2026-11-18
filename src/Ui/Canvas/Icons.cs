@@ -18,11 +18,14 @@ public static class Icons
     public const string Necklace  = "necklace";
     public const string Bracelets = "bracelets";
     public const string Rings     = "rings";
+    public const string RingsLeft = "ringsleft";
     public const string Hair      = "hair";
     public const string Face      = "face";
     public const string Ears      = "ears";
     public const string Tail      = "tail";
     public const string Skin      = "skin";
+    public const string Bodies    = "bodies";
+    public const string Makeup    = "makeup";
     public const string Nails     = "nails";
     public const string ToSort    = "tosort";
     public const string Other     = "other";
@@ -57,6 +60,7 @@ public static class Icons
     public const string Move        = "ui.move";
     public const string Slots       = "ui.slots";
     public const string Copy        = "ui.copy";
+    public const string SaveLook    = "ui.save-look";
     public const string Question    = "ui.question";
     public const string OpenOutside = "ui.open";
 
@@ -73,11 +77,16 @@ public static class Icons
         [Necklace]  = "M5 4c0 6 3 10 7 10s7-4 7-10M12 14l2 3-2 3-2-3 2-3z",
         [Bracelets] = "M4 12a8 5 0 1 0 16 0a8 5 0 1 0-16 0M7.5 12a4.5 2.2 0 1 0 9 0a4.5 2.2 0 1 0-9 0",
         [Rings]     = "M6.5 15a5.5 5.5 0 1 0 11 0a5.5 5.5 0 1 0-11 0M9.5 7l2.5-3 2.5 3-2.5 2.5L9.5 7z",
+        [RingsLeft] = "M6.5 15a5.5 5.5 0 1 0 11 0a5.5 5.5 0 1 0-11 0M9.5 7l2.5-3 2.5 3-2.5 2.5L9.5 7z",
         [Hair]      = "M5 20c-2-9 1.5-16 7-16s9 7 7 16M9 20c-1-5 0-9 3-10 3 1 4 5 3 10",
         [Face]      = "M4 12a8 8 0 1 0 16 0a8 8 0 1 0-16 0M9 10.5v1M15 10.5v1M9.5 15c1.5 1.2 3.5 1.2 5 0",
         [Ears]      = "M3.5 19L6.5 5l5 8.5M12.5 13.5l5-8.5 3 14",
         [Tail]      = "M6 20c0-8 9.5-6.5 9-13-.2-2.6 2.8-3.6 4-1.8",
         [Skin]      = "M12 3c-3.5 4.5-6 7.8-6 11a6 6 0 0 0 12 0c0-3.2-2.5-6.5-6-11z",
+        // a figure: head, shoulders, waist, hips and legs (a body, not a garment and not a drop)
+        // a lipstick: the slanted tip, the tube and its cap (not a face)
+        [Makeup]    = "M10 3.5l4 2.5v4.5h-4V3.5zM9 10.5h6v3H9zM8.5 13.5h7V21h-7z",
+        [Bodies]    = "M10.2 4.2a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0-3.6 0M8.5 8h7c.8 0 1.3.7 1.1 1.4L15 13.5c-.3 1-.3 1.8 0 2.8l.6 4.7M8.5 8c-.8 0-1.3.7-1.1 1.4L9 13.5c.3 1 .3 1.8 0 2.8l-.6 4.7M12 16.5V21",
         [Nails]     = "M9 21v-9a3 3 0 0 1 6 0v9M9.8 11.5c0-4 .8-8 2.2-8s2.2 4 2.2 8",
         [ToSort]    = "M4 13l2.5-8h11L20 13v6H4v-6zM4 13h5a3 3 0 0 0 6 0h5",
         [Other]     = "M4 8l8-4 8 4v8l-8 4-8-4V8zM4 8l8 4 8-4M12 12v8",
@@ -95,6 +104,7 @@ public static class Icons
         [ChevronR]    = "M9 6l6 6-6 6",
         [ChevronL]    = "M15 6l-6 6 6 6",
         [Slots]       = "M5 4.5h14v6H5zM5 13.5h14v6H5z",
+        [SaveLook]    = "M10.0 3.0L11.9 7.9L17.1 8.2L13.0 11.5L14.4 16.6L10.0 13.7L5.6 16.6L7.0 11.5L2.9 8.2L8.1 7.9zM18.5 14.5v6M15.5 17.5h6",
         [Copy]        = "M9 8.5h10v11.5H9zM15 8.5V4H5v11.5h4",
         [ChevronD]    = "M6 9l6 6 6-6",
         [Nothing]     = "M4 12a8 8 0 1 0 16 0a8 8 0 1 0-16 0M6.5 17.5l11-11",

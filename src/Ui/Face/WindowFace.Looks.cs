@@ -105,7 +105,7 @@ public sealed partial class WindowFace
         var ch  = _c.LineHeight(Theme.Small);
 
         // buttons first (at the right, or on their own line when slim): the rest takes what is left
-        var pinText = Loc.T("Pin as new");
+        var pinText = Loc.T("Save as new");
         var updText = Loc.F("Update {0}", now.Name);
         var pinW    = now.CanPin ? Painter.ButtonWidth(_c, pinText, Theme.Body, P(14)) : 0;
         var updW    = now.CanUpdate ? Math.Min(P(220), Painter.ButtonWidth(_c, updText, Theme.BodyBold, P(14))) : 0;
@@ -216,7 +216,7 @@ public sealed partial class WindowFace
 
         if (pinned.Count == 0 && lately.Count == 0)
         {
-            Message(area, Loc.T("No looks yet."), Loc.T("The closet keeps what you wear on its own. Pin an outfit and it stays here."), Icons.Looks, Theme.Muted);
+            Message(area, Loc.T("No looks yet."), Loc.T("The closet keeps what you wear on its own. Save an outfit and it stays here."), Icons.Looks, Theme.Muted);
             return;
         }
 
@@ -230,10 +230,10 @@ public sealed partial class WindowFace
         _ui.PushClip(view);
         var y = area.Y - scroll;
 
-        Painter.TextIn(_c, new Rect(area.X, y + P(18), area.W, P(14)), Loc.T("Pinned"), Theme.Label, Theme.Muted);
+        Painter.TextIn(_c, new Rect(area.X, y + P(18), area.W, P(14)), Loc.T("Saved"), Theme.Label, Theme.Muted);
         y += P(40);
         if (pinned.Count == 0)
-            Painter.TextIn(_c, new Rect(area.X, y, area.W, P(24)), Loc.T("Pin an outfit you like and it stays here."), Theme.Caption, Theme.Muted);
+            Painter.TextIn(_c, new Rect(area.X, y, area.W, P(24)), Loc.T("Save an outfit you like and it stays here."), Theme.Caption, Theme.Muted);
         for (var i = 0; i < pinned.Count; ++i)
         {
             var box = new Rect(area.X + i % cols * (cw + gap), y + i / cols * (pinH + gap), cw, pinH);
@@ -246,7 +246,7 @@ public sealed partial class WindowFace
         {
             var lw0 = _c.Measure(Loc.T("Lately"), Theme.Label).X;
             Painter.TextIn(_c, new Rect(area.X, y + P(18), lw0, P(14)), Loc.T("Lately"), Theme.Label, Theme.Muted);
-            Painter.TextIn(_c, new Rect(area.X + lw0 + P(12), y + P(17), area.W - lw0 - P(12), P(16)), Loc.T("The closet keeps what you wore on its own. Pin the ones you like."), Theme.Small, Theme.Muted);
+            Painter.TextIn(_c, new Rect(area.X + lw0 + P(12), y + P(17), area.W - lw0 - P(12), P(16)), Loc.T("The closet keeps what you wore on its own. Save the ones you like."), Theme.Small, Theme.Muted);
             y += P(40);
             for (var i = 0; i < lately.Count; ++i)
             {
@@ -407,7 +407,7 @@ public sealed partial class WindowFace
         if (pinResp.Hovered)
             _c.FillRect(pin, Theme.Picked, P(7));
         Painter.Icon(_c, Icons.Pin, pin.Center, P(14), pinResp.Hovered ? Theme.Text : Theme.Muted, 1.9f);
-        _ui.Tip("lately-pin/" + card.Id, pin, Loc.T("Pin this outfit as a look"));
+        _ui.Tip("lately-pin/" + card.Id, pin, Loc.T("Save this outfit as a look"));
         if (resp.Hovered)
             _c.FillRect(r, Theme.HoverWash, P(12));
         if (card.State == CardState.Trying)
@@ -457,11 +457,13 @@ public sealed partial class WindowFace
 
     private void LookMenu(ILooks looks, LookCard card)
     {
+        // the look as it is now (a tick in "Takes along" keeps the menu open and changes it)
+        card = looks.Pinned.FirstOrDefault(c => c.Id == card.Id) ?? card;
         var items = new List<MenuItem>();
         if (card.Pinned)
         {
             items.Add(new MenuItem("rename", Loc.T("Rename")) { Icon = Icons.Settings });
-            items.Add(new MenuItem("body", Loc.T("Also change hair and body")) { Checked = card.WithBody });
+            items.Add(new MenuItem("takes", Loc.T("Takes along")) { Sub = TakesAlongItems(card), Icon = Icons.Bodies });
             if (card.Colourways.Count >= 2)
                 items.Add(new MenuItem("way", Loc.T("Remove this colourway")) { Icon = Icons.Palette });
             items.Add(MenuItem.Separator());
@@ -469,7 +471,7 @@ public sealed partial class WindowFace
         }
         else
         {
-            items.Add(new MenuItem("pin", Loc.T("Pin as a look")) { Icon = Icons.Pin });
+            items.Add(new MenuItem("pin", Loc.T("Save as a look")) { Icon = Icons.Pin });
             items.Add(MenuItem.Separator());
             items.Add(new MenuItem("remove", Loc.T("Forget this outfit")) { Icon = Icons.Close });
         }
@@ -480,9 +482,15 @@ public sealed partial class WindowFace
             case "rename":
                 StartRename(card);
                 break;
-            case "body":
-                looks.SetWithBody(card.Id, !card.WithBody);
+            case { } id when id.StartsWith("take:", StringComparison.Ordinal):
+            {
+                var shelf = id[5..];
+                var now   = card.BodyShelves.ToList();
+                if (!now.Remove(shelf))
+                    now.Add(shelf);
+                looks.SetBodyShelves(card.Id, now);
                 break;
+            }
             case "way":
                 looks.RemoveColourway(card.Id, card.Colourway);
                 break;
@@ -493,6 +501,30 @@ public sealed partial class WindowFace
                 looks.Pin(card.Id);
                 break;
         }
+    }
+
+    /// <summary>
+    /// "Takes along": every body shelf of the rail, ticked when the look puts it on. A look that holds no clothes keeps at
+    /// least one: its last tick waits, and says why.
+    /// </summary>
+    private List<MenuItem> TakesAlongItems(LookCard card)
+    {
+        var clothes = card.Tiles.Any(t => !Pieces.IsBodyPiece(t.Piece));
+        var items   = new List<MenuItem>();
+        foreach (var row in _s.Rail.Where(r => Pieces.IsBodyPiece(r.Id)))
+        {
+            var on   = card.BodyShelves.Contains(row.Id);
+            var last = on && !clothes && card.BodyShelves.Count == 1;
+            items.Add(new MenuItem("take:" + row.Id, row.Name)
+            {
+                Checked  = on,
+                KeepOpen = true,
+                Enabled  = !last,
+                Hint     = last ? Loc.T("Something has to be saved") : null,
+            });
+        }
+
+        return items;
     }
 
     /// <summary> A look with pieces whose mod is gone: per missing shelf the closest parts; a click puts one in. </summary>

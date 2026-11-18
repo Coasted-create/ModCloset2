@@ -111,6 +111,12 @@ public sealed class GearTuning
     /// </summary>
     public float BodyHomeAnyShare { get; init; } = 0.01f;
 
+    /// <summary> A model on the bare body's sets with at most this much surface of its own (m²) is bare (pubic hair, a seam)… </summary>
+    public float NearBareArea { get; init; } = 0.01f;
+
+    /// <summary> …and at most this share of its bare skin. </summary>
+    public float NearBareShare { get; init; } = 0.05f;
+
     /// <summary> A head-slot model with this share at the hips (and no torso) carries a tail weighted to the hips. </summary>
     public float TailSetMinHips { get; init; } = 0.3f;
 

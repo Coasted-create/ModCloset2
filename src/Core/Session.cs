@@ -107,6 +107,13 @@ public sealed class Card
     public bool OwnMod { get; init; }
 
     /// <summary>
+    /// A ring-slot card with files for one hand only: <see cref="Hands.Right"/> or <see cref="Hands.Left"/>. The card offers
+    /// "Make a copy for the other hand…" (<see cref="IClosetSession.OwnModOf(PartKey, Hands)"/>). <see cref="Hands.Both"/>
+    /// otherwise.
+    /// </summary>
+    public Hands OneHand { get; init; }
+
+    /// <summary>
     /// This card's mod is a copy the closet made of one thing of another mod: that mod's name ("" otherwise). While the
     /// copy is there, the thing has no card of its own in the mod it came from, unless it is on or tried on from there.
     /// </summary>
@@ -132,6 +139,15 @@ public sealed class OptionChip
 
     /// <summary> Several choices can be on at once. </summary>
     public bool Multi { get; init; }
+
+    /// <summary>
+    /// A body or race group of a mod that is not a body mod: the closet picks the choice that fits the player's body.
+    /// Offered after the mod's own groups.
+    /// </summary>
+    public bool Fits { get; init; }
+
+    /// <summary> A <see cref="Fits"/> group nobody chose by hand: the closet's pick is used ("Automatic"). </summary>
+    public bool Automatic { get; init; }
 }
 
 /// <summary> One slot of the game a thing can be worn through, when its mod offers it in several. </summary>
@@ -187,6 +203,9 @@ public sealed class WearingInfo
 
     /// <summary> The piece's colour bar; empty until colours are supported for it. </summary>
     public IReadOnlyList<ColourSegment> Colours { get; init; } = Array.Empty<ColourSegment>();
+
+    /// <summary> It is tried, not worn: the strip says "Trying" and its changes go to the try. </summary>
+    public bool Trying { get; init; }
 }
 
 public sealed class TryItem
@@ -338,7 +357,11 @@ public interface IClosetSession
 
     /// <summary> Tries taking off what is on in a shelf. </summary>
     void TryNothing(string piece);
-    void SetOption(PartKey part, string group, IReadOnlyList<string> on);
+    /// <remarks>
+    /// <paramref name="on"/> null: a <see cref="OptionChip.Fits"/> group goes back to the closet's automatic pick (the
+    /// hand choice is forgotten); for any other group null does nothing.
+    /// </remarks>
+    void SetOption(PartKey part, string group, IReadOnlyList<string>? on);
     void SetVersion(PartKey part, int index);
 
     /// <summary> Makes everything that is being tried on permanent, as one undo step. </summary>
@@ -434,6 +457,13 @@ public interface IClosetSession
         => null;
 
     /// <summary>
+    /// The same for a copy worn on the other hand (<paramref name="to"/>: the hand the copy is for). The proposed name says
+    /// the hand ("Silver band · left hand"). The copy holds only the ring.
+    /// </summary>
+    OwnModPlan? OwnModOf(PartKey part, Hands to)
+        => to == Hands.Both ? OwnModOf(part) : null;
+
+    /// <summary>
     /// Makes the new mod under that name, in the background: <see cref="OwnModOf"/> answers
     /// <see cref="OwnModState.Making"/> meanwhile, and the outcome comes as <see cref="Status"/>. The mod it is copied
     /// from is not changed, and nothing on the character changes: the new mod starts switched off. Does nothing unless
@@ -441,6 +471,13 @@ public interface IClosetSession
     /// </summary>
     void MakeOwnMod(PartKey part, string name)
     {
+    }
+
+    /// <summary> Makes the copy for the other hand (see <see cref="OwnModOf(PartKey, Hands)"/>). </summary>
+    void MakeOwnMod(PartKey part, string name, Hands to)
+    {
+        if (to == Hands.Both)
+            MakeOwnMod(part, name);
     }
 
     /// <summary>

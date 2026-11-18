@@ -26,10 +26,10 @@ public static class BodySpots
         => spot switch
         {
             HeadTop                => new[] { Pieces.Hair, Pieces.Head, Pieces.Ears },
-            Face                   => new[] { Pieces.Face, Pieces.Head },
+            Face                   => new[] { Pieces.Face, Pieces.Makeup, Pieces.Head },
             EarLeft or EarRight    => new[] { Pieces.Earrings, Pieces.Ears },
             Neck                   => new[] { Pieces.Necklace },
-            Chest                  => new[] { Pieces.Top, Pieces.Outfits, Pieces.Skin },
+            Chest                  => new[] { Pieces.Top, Pieces.Outfits, Pieces.Bodies, Pieces.Skin },
             HandLeft or HandRight  => new[] { Pieces.Gloves, Pieces.Bracelets, Pieces.Rings, Pieces.Nails },
             Hips                   => new[] { Pieces.Bottoms },
             LegLeft or LegRight    => new[] { Pieces.Legwear, Pieces.Bottoms },

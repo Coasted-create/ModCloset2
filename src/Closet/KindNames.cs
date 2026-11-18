@@ -47,7 +47,7 @@ public static class KindNames
         ["piercing"]        = ("Piercing", "Piercings"),
         ["bag"]             = ("Bag", "Bags"),
 
-        // a body mod (Skin): its bare-skin models and its skin are one part
+        // a body mod (Bodies): its bare-skin models and its skin are one part
         ["body"]            = ("Body", "Bodies"),
 
         // the kinds of the Outfits shelf's own cards (its chips tell them apart)
@@ -56,7 +56,7 @@ public static class KindNames
     };
 
     /// <summary> Kinds a shelf of the user's cannot belong to: the Outfits shelf's own kinds, and those whose name is a built-in shelf's. </summary>
-    /// <summary> ("body" has its built-in shelf, Skin: a shelf of the user's never takes the body mods from it.) </summary>
+    /// <summary> ("body" has its built-in shelf, Bodies: a shelf of the user's never takes the body mods from it.) </summary>
     private static readonly HashSet<string> NotForShelves = new(StringComparer.OrdinalIgnoreCase) { "outfit", "jewellery set", "body" };
 
     /// <summary>

@@ -94,6 +94,9 @@ public sealed partial class ClosetSession
         var map = new Dictionary<PartKey, string>();
         foreach (var (dir, copy) in _data.Copies)
         {
+            // a ring made for the other hand stands in for nothing: the ring it came from keeps its card
+            if (copy.Hand != Hands.Both)
+                continue;
             var parts = _library.PartsOf(dir);
             if (parts.Count == 0)
                 continue;
@@ -176,10 +179,10 @@ public sealed partial class ClosetSession
     /// The copy already made of a thing (any of its slots), or null. A copy that was in the library and is not now does
     /// not count (its note waits for a second read before it goes).
     /// </summary>
-    private (string Folder, OwnCopy Copy)? CopyOfThing(string mod, IReadOnlyList<LibPart> thing)
+    private (string Folder, OwnCopy Copy)? CopyOfThing(string mod, IReadOnlyList<LibPart> thing, Hands hand = Hands.Both)
     {
         foreach (var (dir, copy) in _data.Copies)
-            if (copy.From.Equals(mod, StringComparison.OrdinalIgnoreCase) && thing.Any(p => copy.Slots.Contains((int)p.Key.Socket))
+            if (copy.Hand == hand && copy.From.Equals(mod, StringComparison.OrdinalIgnoreCase) && thing.Any(p => copy.Slots.Contains((int)p.Key.Socket))
              && (!copy.Seen || _library.Mod(dir) is not null))
                 return (dir, copy);
         return null;
@@ -195,6 +198,7 @@ public sealed partial class ClosetSession
     private sealed class OwnPlanEntry
     {
         public PartKey Lead { get; init; }
+        public Hands ToHand { get; init; }
         public LibMod Mod { get; init; } = null!;
         public Dictionary<string, List<string>> Chosen { get; init; } = new();
         public List<Socket> Sockets { get; init; } = new();
@@ -209,14 +213,21 @@ public sealed partial class ClosetSession
     }
 
     /// <summary> Plans per card (by its thing's lead), kept until the mod or the options that are on for the thing change. </summary>
-    private readonly Dictionary<PartKey, OwnPlanEntry> _ownPlans = new();
+    private readonly Dictionary<(PartKey Lead, Hands Hand), OwnPlanEntry> _ownPlans = new();
 
     /// <summary> The plan being worked out (one at a time), and the card asked for last. </summary>
     private OwnPlanEntry? _planRunning;
     private Thread? _planThread;
-    private PartKey? _planWanted;
+    private (PartKey Lead, Hands Hand)? _planWanted;
 
     public OwnModPlan? OwnModOf(PartKey part)
+        => OwnModOfCore(part, Hands.Both);
+
+    /// <summary> A copy of a ring with files for one hand, made for the other hand (<paramref name="to"/>). </summary>
+    private OwnModPlan? OwnModOfHand(PartKey part, Hands to)
+        => OwnModOfCore(part, to);
+
+    private OwnModPlan? OwnModOfCore(PartKey part, Hands to)
     {
         if (!OwnModsOn)
             return null;
@@ -225,34 +236,56 @@ public sealed partial class ClosetSession
         if (thing.Count == 0)
             return No(Loc.T("This piece is not in the closet any more."));
         var lead = LeadOf(thing[0].Key);
-        if (_ownWrite is { } writing && writing.Entry.Lead == lead)
+        if (_ownWrite is { } writing && writing.Entry.Lead == lead && writing.Entry.ToHand == to)
             return Making(writing);
         if (!thing.All(p => MergesSlots(p.Key.Socket)))
             return No(Loc.T("Only gear can be made a mod of its own for now."));
+        if (to != Hands.Both)
+        {
+            // a ring for the other hand: only a ring with files for one hand, and only for the hand it lacks
+            if (thing.Count != 1 || thing[0].Key.Socket != Socket.Rings)
+                return No(Loc.T("Only a ring can be made for the other ring slot."));
+            var has = HandsOf(thing[0]);
+            if (has == Hands.Both)
+                return No(Loc.T("This ring is made for both ring slots already."));
+            if (has == to)
+                return No(to == Hands.Left ? Loc.T("This ring is made for the left ring slot already.") : Loc.T("This ring is made for the right ring slot already."));
+        }
+
         var mod = thing[0].Mod;
-        if (CopyOfThing(mod.Directory, thing) is { } made)
-            return No(Loc.F("This piece already is a mod of its own: {0}.", _library.Mod(made.Folder)?.Name ?? made.Copy.Name));
+        if (CopyOfThing(mod.Directory, thing, to) is { } made)
+            return No(to == Hands.Both
+                ? Loc.F("This piece already is a mod of its own: {0}.", _library.Mod(made.Folder)?.Name ?? made.Copy.Name)
+                : Loc.F("There is a copy of this ring for the other ring slot already: {0}.", _library.Mod(made.Folder)?.Name ?? made.Copy.Name));
         if (mod.Facts is not { Folder.Length: > 0 })
             return No(Loc.T("The closet has not read this mod's files yet."));
 
         var chosen = ChosenFor(thing);
-        if (!_ownPlans.TryGetValue(lead, out var entry) || !ReferenceEquals(entry.Mod, mod) || !SameOptions(entry.Chosen, chosen))
+        if (!_ownPlans.TryGetValue((lead, to), out var entry) || !ReferenceEquals(entry.Mod, mod) || !SameOptions(entry.Chosen, chosen))
         {
             var shelf = _shelfOf.GetValueOrDefault(lead, Pieces.Other);
             var piece = PieceName(thing[0], shelf);
-            _ownPlans[lead] = entry = new OwnPlanEntry
+            // the proposed name says the slot ("Silver band · left ring slot")
+            var name  = to switch
+            {
+                Hands.Left  => Loc.F("{0} · {1}", mod.Name, Loc.T("left ring slot")),
+                Hands.Right => Loc.F("{0} · {1}", mod.Name, Loc.T("right ring slot")),
+                _           => Loc.F("{0} · {1}", mod.Name, piece),
+            };
+            _ownPlans[(lead, to)] = entry = new OwnPlanEntry
             {
                 Lead    = lead,
+                ToHand  = to,
                 Mod     = mod,
                 Chosen  = chosen,
                 Sockets = thing.Select(p => p.Key.Socket).ToList(),
-                Name    = FreeName(Loc.F("{0} · {1}", mod.Name, piece)),
+                Name    = FreeName(name),
                 Piece   = piece,
-                Stays   = StaysOf(mod.Directory, lead),
+                Stays   = to == Hands.Both ? StaysOf(mod.Directory, lead) : new List<string>(),
             };
         }
 
-        _planWanted = lead;
+        _planWanted = (lead, to);
         StartPlan();
         return PlanOf(entry);
     }
@@ -264,7 +297,7 @@ public sealed partial class ClosetSession
             return;
         _planRunning = null;
         _planThread  = null;
-        if (_planWanted is not { } lead || !_ownPlans.TryGetValue(lead, out var entry) || entry.Started || OwnModMaker is not { } maker)
+        if (_planWanted is not { } wanted || !_ownPlans.TryGetValue(wanted, out var entry) || entry.Started || OwnModMaker is not { } maker)
             return;
 
         entry.Started = true;
@@ -273,6 +306,7 @@ public sealed partial class ClosetSession
             ModFolder = entry.Mod.Facts?.Folder ?? string.Empty,
             Sockets   = entry.Sockets,
             Chosen    = entry.Chosen.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value.ToList()),
+            ToHand    = entry.ToHand,
         };
         _planRunning = entry;
         _planThread = new Thread(() =>
@@ -315,7 +349,7 @@ public sealed partial class ClosetSession
         {
             plan = No(content.Problem.Length > 0 ? content.Problem : Loc.T("The closet could not read this mod's files."));
         }
-        else if (!content.ModHasMore)
+        else if (!content.ModHasMore && entry.ToHand == Hands.Both)
         {
             plan = No(Loc.T("This mod is only this piece."));
         }
@@ -447,6 +481,13 @@ public sealed partial class ClosetSession
     private (string Folder, string Name, DateTime Until)? _ownAnnounce;
 
     public void MakeOwnMod(PartKey part, string name)
+        => MakeOwnModCore(part, name, Hands.Both);
+
+    /// <summary> Makes the copy of a one-hand ring for the other hand (<paramref name="to"/>). </summary>
+    private void MakeOwnModFor(PartKey part, string name, Hands to)
+        => MakeOwnModCore(part, name, to);
+
+    private void MakeOwnModCore(PartKey part, string name, Hands to)
     {
         if (!OwnModsOn)
             return;
@@ -468,9 +509,9 @@ public sealed partial class ClosetSession
         }
 
         var lead = LeadOf(thing[0].Key);
-        if (!_ownPlans.TryGetValue(lead, out var entry) || PlanOf(entry) is not { State: OwnModState.Ready } plan || entry.Content is not { } content)
+        if (!_ownPlans.TryGetValue((lead, to), out var entry) || PlanOf(entry) is not { State: OwnModState.Ready } plan || entry.Content is not { } content)
         {
-            var now = OwnModOf(part);
+            var now = OwnModOfCore(part, to);
             SetStatus(now is { State: OwnModState.No } no ? no.Why : Loc.T("The closet is still looking at the mod's files. Try again in a moment."), now?.State == OwnModState.No);
             return;
         }
@@ -562,7 +603,7 @@ public sealed partial class ClosetSession
         if (job.Stopped || job.Stop.IsCancellationRequested)
             return;
         var entry = job.Entry;
-        _ownPlans.Remove(entry.Lead);
+        _ownPlans.Remove((entry.Lead, entry.ToHand));
         _viewDirty = true;
         if (job.Error is not null || job.Folder is not { Length: > 0 } folder)
         {
@@ -608,6 +649,7 @@ public sealed partial class ClosetSession
             Name     = job.Name,
             Slots    = job.Thing.Select(p => (int)p.Key.Socket).ToList(),
             Shelf    = job.Shelf,
+            Hand     = job.Entry.ToHand,
             MadeUtc  = _now(),
         };
 
@@ -618,6 +660,8 @@ public sealed partial class ClosetSession
             var to = new PartKey(folder, part.Key.Socket);
             if (_data.Versions.TryGetValue(part.KeyText, out var version))
                 _data.Versions[to.ToString()] = version;
+            if (_data.FitChoices.TryGetValue(part.KeyText, out var fit))
+                _data.FitChoices[to.ToString()] = fit.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
             try
             {
                 Colours?.CopyMemory(part.Key, to);
