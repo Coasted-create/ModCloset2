@@ -103,6 +103,13 @@ public sealed class Card
     /// </summary>
     public bool SlotUnusual { get; init; }
 
+    /// <summary>
+    /// The names of the mod's option groups that change this card's thing and that the user can set (as the Options strip
+    /// shows them while it is tried or on: "Sleeves", "Back", "Face"), in the mod's order; empty when there is nothing to
+    /// choose. The versions a card has (<see cref="Versions"/>) are not counted here. Faces show "Options" on the card.
+    /// </summary>
+    public IReadOnlyList<string> OptionGroups { get; init; } = Array.Empty<string>();
+
     /// <summary> The user moved it here (so "Put back where the closet had it" is offered). </summary>
     public bool Moved { get; init; }
 

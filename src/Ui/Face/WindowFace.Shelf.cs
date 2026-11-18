@@ -818,7 +818,7 @@ public sealed partial class WindowFace
         if (mark.Length > 0)
             Painter.Mark(_c, new Vector2(pic.X + P(8), pic.Y + P(8)), mark, fill, _u);
         // the notes at the picture's bottom right, stacked when there are two ("3 slots" under "2 versions"), so they
-        // never crowd the corner sideways; they keep clear of the "?" at the bottom left
+        // never crowd the corner sideways; they keep clear of what sits at the bottom left: the "?", then "Options"
         var notes = new List<(string Kind, string Text)>(2);
         if (card.Versions > 1)
             notes.Add(("versions", Loc.F("{0} versions", card.Versions)));
@@ -827,7 +827,16 @@ public sealed partial class WindowFace
         if (notes.Count == 0 && card.PartsInMod > 1)
             notes.Add(("set", Loc.F("{0}-piece set", card.PartsInMod)));
         var noteBottom = pic.Bottom - P(8);
-        var noteMax    = pic.W - P(16) - (card.Unsure ? P(26) : 0);
+        var leftX      = pic.X + P(8) + (card.Unsure ? P(26) : 0);
+        var optionsW   = 0f;
+        if (card.OptionGroups.Count > 0)
+        {
+            // the word when it fits beside the bottom note, else the sliders icon alone (the tooltip says it either way)
+            var noteW = notes.Count == 0 ? 0 : Math.Min(pic.W - P(16), _c.Measure(notes[^1].Text, Theme.MarkPlain).X + P(14)) + P(6);
+            optionsW  = OptionsMarkWidth(true) <= pic.Right - P(8) - noteW - leftX ? OptionsMarkWidth(true) : OptionsMarkWidth(false);
+        }
+
+        var noteMax = pic.Right - P(8) - leftX - (optionsW > 0 ? optionsW + P(6) : 0);
         for (var i = notes.Count - 1; i >= 0; --i)
         {
             var box = Painter.Note(_c, new Vector2(pic.Right - P(8), noteBottom), notes[i].Text, _u, noteMax);
@@ -837,6 +846,8 @@ public sealed partial class WindowFace
 
         if (card.Unsure)
             UnsureMark(card, new Vector2(pic.X + P(8), pic.Bottom - P(8)));
+        if (optionsW > 0)
+            OptionsMark(card, new Rect(leftX, pic.Bottom - P(8) - P(20), optionsW, P(20)));
         if (card.SlotName.Length > 0)
             SlotMark(card, pic, mark.Length > 0 ? Painter.MarkWidth(_c, mark, _u) : 0);
 
@@ -867,11 +878,12 @@ public sealed partial class WindowFace
         else if (index == _nav && _navShown)
             _c.StrokeRect(r.Expand(P(2)), Theme.Faint, P(14), P(2));
 
-        // the tooltip names the slot it is worn through (and the whole name when it is cut)
-        if (card.SlotName.Length > 0)
-            _ui.Tip(id, r, Loc.F("{0} · {1}", card.Name, card.SlotName));
-        else if (fitted != card.Name)
-            _ui.Tip(id, r, card.Name);
+        // the tooltip names the slot it is worn through (and the whole name when it is cut), and the options it has
+        var tip = card.SlotName.Length > 0 ? Loc.F("{0} · {1}", card.Name, card.SlotName) : fitted != card.Name || card.OptionGroups.Count > 0 ? card.Name : string.Empty;
+        if (card.OptionGroups.Count > 0)
+            tip += "\n" + OptionsText(card);
+        if (tip.Length > 0)
+            _ui.Tip(id, r, tip);
         if (resp.Clicked)
         {
             _nav      = index;
@@ -927,6 +939,36 @@ public sealed partial class WindowFace
         }
 
         Stats.Places[id] = box;
+    }
+
+    /// <summary> "Options: Sleeves, Back": what the "Options" mark and the card's tooltip say. </summary>
+    private static string OptionsText(Card card)
+        => Loc.F("Options: {0}", string.Join(", ", card.OptionGroups));
+
+    /// <summary> The "Options" mark's width: the sliders icon and the word, or the icon alone. </summary>
+    private float OptionsMarkWidth(bool word)
+        => word ? P(7) + P(12) + P(5) + _c.Measure(Loc.T("Options"), Theme.MarkPlain).X + P(7) : P(20);
+
+    /// <summary>
+    /// The mod has options to set (<see cref="Card.OptionGroups"/>): a quiet note at the picture's bottom left, opposite
+    /// "3 versions" and styled like it, after the "?" when there is one. The sliders icon and "Options" (the word the
+    /// Options strip uses), or only the icon when the word does not fit; its tooltip names the groups.
+    /// </summary>
+    private void OptionsMark(Card card, Rect box)
+    {
+        _c.FillRect(box, Theme.NoteFill, P(6));
+        if (box.W > P(20))
+        {
+            Painter.Icon(_c, Icons.Settings, new Vector2(box.X + P(7) + P(6), box.Center.Y), P(12), Theme.Text, 1.8f);
+            _c.Text(new Vector2(box.X + P(7) + P(12) + P(5), box.Center.Y - _c.LineHeight(Theme.MarkPlain) / 2), Loc.T("Options"), Theme.MarkPlain, Theme.Text);
+        }
+        else
+            Painter.Icon(_c, Icons.Settings, box.Center, P(12), Theme.Text, 1.8f);
+
+        var id = "options-mark/" + card.Key;
+        Stats.Places[id] = box;
+        _ui.Interact(id, box, false);
+        _ui.Tip(id, box, OptionsText(card));
     }
 
     private void UnsureMark(Card card, Vector2 bottomLeft)

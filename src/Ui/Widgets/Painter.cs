@@ -50,9 +50,26 @@ public static class Painter
         return text[..lo].TrimEnd() + Ellipsis;
     }
 
-    /// <summary> Splits text into lines no wider than the width (words kept whole where they fit). </summary>
+    /// <summary>
+    /// Splits text into lines no wider than the width (words kept whole where they fit). A line break in the text always
+    /// starts a new line.
+    /// </summary>
     public static List<string> Wrap(ICanvas c, string text, float width, TextStyle style, int maxLines = 99)
     {
+        if (text.Contains('\n'))
+        {
+            var all = new List<string>();
+            foreach (var part in text.Split('\n'))
+                all.AddRange(Wrap(c, part, width, style));
+            if (all.Count > maxLines)
+            {
+                all[maxLines - 1] = Fit(c, string.Join(' ', all.Skip(maxLines - 1)), width, style);
+                all.RemoveRange(maxLines, all.Count - maxLines);
+            }
+
+            return all;
+        }
+
         var lines = new List<string>();
         var line  = string.Empty;
         foreach (var word in text.Split(' '))

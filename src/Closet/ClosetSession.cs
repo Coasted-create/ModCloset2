@@ -1501,6 +1501,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             Versions   = click.VersionCount,
             Slots      = thing.Count,
             SlotName   = SlotNameOf(click.Key.Socket),
+            OptionGroups = OptionGroupsOf(thing),
             SlotUnusual = IsGearSlot(click.Key.Socket) && UsualSlot(shelf) is { } usual && usual != click.Key.Socket,
             PartsInMod = _outfits.TryGetValue(part.Mod.Directory, out var set) && set.Any(p => LeadOf(p.Key) == lead) ? set.Count : 1,
             Moved      = thing.Any(p => _data.Moves.TryGetValue(p.KeyText, out var moved) && moved != p.Info.Piece && IsHome(moved)),
@@ -2924,6 +2925,32 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             if (IsFit(group) && Offerable(group) && !own.Contains(group) && Touches(group, part))
                 own.Add(group);
         return own;
+    }
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<LibPart, IReadOnlyList<string>> _optionGroupNames = new();
+
+    /// <summary>
+    /// The names of the option groups a card's thing has to choose from: the groups the strip offers for its parts
+    /// (<see cref="OfferedGroups"/>), Fits groups included, in the mod's order. A part's groups are read once per part (a
+    /// rescan makes new parts), so a card costs a lookup.
+    /// </summary>
+    private IReadOnlyList<string> OptionGroupsOf(IReadOnlyList<LibPart> thing)
+    {
+        if (thing.Count == 1)
+            return _optionGroupNames.GetValue(thing[0], static p => InModOrder(p.Mod, OfferedGroups(p)));
+        return InModOrder(thing[0].Mod, thing.SelectMany(OfferedGroups).Distinct().ToList());
+    }
+
+    /// <summary> The names of some of a mod's groups in the mod's order (the strip lists a part's own groups first). </summary>
+    private static IReadOnlyList<string> InModOrder(LibMod mod, IReadOnlyCollection<GroupInfo> groups)
+    {
+        if (groups.Count == 0)
+            return Array.Empty<string>();
+        var names = new List<string>(groups.Count);
+        foreach (var group in mod.Groups)
+            if (groups.Contains(group) && !names.Contains(group.Name))
+                names.Add(group.Name);
+        return names;
     }
 
     /// <summary> A group changes this part: the part's groups name it, or its files are for the part's socket. </summary>
