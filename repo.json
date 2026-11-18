@@ -20,8 +20,8 @@
     "IsTestingExclusive": false,
     "DownloadCount": 0,
     "LastUpdate": 1794970837,
-    "DownloadLinkInstall": "https://github.com/Coasted-create/ModCloset2/releases/download/v0.5.0/ModCloset2.zip",
-    "DownloadLinkTesting": "https://github.com/Coasted-create/ModCloset2/releases/download/v0.5.0/ModCloset2.zip",
-    "DownloadLinkUpdate": "https://github.com/Coasted-create/ModCloset2/releases/download/v0.5.0/ModCloset2.zip"
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/Coasted-create/ModCloset2/main/release/0.5.0/ModCloset2.zip",
+    "DownloadLinkTesting": "https://raw.githubusercontent.com/Coasted-create/ModCloset2/main/release/0.5.0/ModCloset2.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/Coasted-create/ModCloset2/main/release/0.5.0/ModCloset2.zip"
   }
 ]
