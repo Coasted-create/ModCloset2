@@ -2,7 +2,7 @@
   "Author": "Coasted-create",
   "Name": "Mod Closet 2",
   "InternalName": "ModCloset2",
-  "AssemblyVersion": "0.7.2.0",
+  "AssemblyVersion": "0.7.3.0",
   "Punchline": "Your Penumbra mods as a closet: pick a piece, click a mod, it is on.",
   "Description": "Sorts your Penumbra mods onto shelves by what they are on you (tops, ears, tails, nails…). Click a card to try it on over your look, Keep to make it stay, Put back to undo the try. Drag a mod to another shelf and the closet remembers. Every card shows a photo of its piece, taken by the closet itself without touching your character. Outfit colours for what you wear, looks that save themselves, and On you: point at a part of your character to change it. Requires Penumbra and Glamourer. Command: /closet2",
   "ApplicableVersion": "any",

@@ -263,6 +263,10 @@ public static class Painter
 
     // ---- chips and marks ----
 
+    /// <summary> How wide <see cref="Mark"/> draws a mark. </summary>
+    public static float MarkWidth(ICanvas c, string text, float u)
+        => c.Measure(text, Theme.Mark).X + 14 * u;
+
     /// <summary> A mark on a picture: "On", "Trying on", "New" (filled) at a top-left point. Returns its width. </summary>
     public static float Mark(ICanvas c, Vector2 at, string text, Colr fill, float u)
     {

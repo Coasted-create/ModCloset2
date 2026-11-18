@@ -49,6 +49,9 @@ public sealed partial class WindowFace
                 case PopOther when _ui.PopupContext is SortItem item:
                     OtherPicked(item, Menu.Draw(_ui, PopOther, _ui.PopupAnchor, OtherMenu(item), 200));
                     break;
+                case PopSlotChips:
+                    SlotChipsMenu();
+                    break;
                 case PopKinds:
                     KindsMenu();
                     break;

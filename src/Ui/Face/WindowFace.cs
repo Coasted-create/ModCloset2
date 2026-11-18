@@ -89,6 +89,7 @@ public sealed partial class WindowFace
     private const string PopNewShelf = "new-shelf";
     private const string PopOther    = "sort-other";
     private const string PopKinds    = "kinds";
+    private const string PopSlotChips = "slot-chips";
 
     private readonly Gui _ui = new();
     private IClosetSession _s = null!;

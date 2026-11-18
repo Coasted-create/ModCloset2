@@ -82,6 +82,22 @@ public static class KindNames
     }
 
     /// <summary> How a part is worn, for telling two cards of one mod apart ("Wrist slot"). Translated. </summary>
+    /// <summary> A gear slot's name in English, what <see cref="SlotLabel"/> translates (the search knows both). </summary>
+    public static string SlotLabelEnglish(Socket socket)
+        => socket switch
+        {
+            Socket.Head   => "Head slot",
+            Socket.Body   => "Body slot",
+            Socket.Hands  => "Hands slot",
+            Socket.Legs   => "Legs slot",
+            Socket.Feet   => "Feet slot",
+            Socket.Ears   => "Ears slot",
+            Socket.Neck   => "Neck slot",
+            Socket.Wrists => "Wrist slot",
+            Socket.Rings  => "Ring slot",
+            _             => string.Empty,
+        };
+
     public static string SlotLabel(Socket socket)
         => socket switch
         {

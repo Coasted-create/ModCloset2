@@ -595,5 +595,9 @@
   "{0} is kept just under {1}: the settings of {1} come from another collection and are left as they are, so another mod may still show over {0}.": "{0} wird knapp unter {1} behalten: Die Einstellungen von {1} kommen aus einer anderen Sammlung und bleiben, wie sie sind, also kann eine andere Mod noch über {0} zu sehen sein.",
   "goes over {0}": "liegt über {0}",
   "goes under {0}": "liegt unter {0}",
-  "{0} is kept just under {1}: another plugin holds the settings of {1} for now and they are left as they are, so another mod may still show over {0}.": "{0} wird knapp unter {1} behalten: Ein anderes Plugin hält die Einstellungen von {1} gerade fest, und sie bleiben, wie sie sind, also kann eine andere Mod noch über {0} zu sehen sein."
+  "{0} is kept just under {1}: another plugin holds the settings of {1} for now and they are left as they are, so another mod may still show over {0}.": "{0} wird knapp unter {1} behalten: Ein anderes Plugin hält die Einstellungen von {1} gerade fest, und sie bleiben, wie sie sind, also kann eine andere Mod noch über {0} zu sehen sein.",
+  "Main hand slot": "Platz: Haupthand",
+  "Off hand slot": "Platz: Nebenhand",
+  "Slot: {0}": "Platz: {0}",
+  "All slots": "Alle Plätze"
 }

@@ -78,8 +78,14 @@ public sealed partial class WindowFace
         var x      = r.X + P(24);
         var w      = r.W - P(48);
         var header = new Rect(x, r.Y + P(16), w, P(40));
-        Header(header, false);
+        var slotRow = Header(header, false);
         var y = header.Bottom + P(12);
+        if (slotRow)
+        {
+            // no room beside the heading: the slot filter on a compact row of its own
+            SlotButton(new Rect(x, y, Math.Min(w, SlotButtonWidth()), P(30)));
+            y += P(30) + P(10);
+        }
         if (_s.Suggestion is { } suggestion)
         {
             var h = Banner(new Rect(x, y, w, 0), suggestion, false);
@@ -111,8 +117,11 @@ public sealed partial class WindowFace
             Painter.TextIn(_c, new Rect(r.X + titleW + (slim ? P(8) : P(12)), r.Y + (slim ? P(2) : P(4)), countW + 1, r.H), text, cs, Theme.Muted);
     }
 
-    /// <summary> The shelf's name (or "Search"), its count, and the kind chips. </summary>
-    private void Header(Rect r, bool slim)
+    /// <summary>
+    /// The shelf's name (or "Search"), its count, the kind chips and the slot filter. Returns true when the slot filter did
+    /// not fit beside the heading (the caller gives it a compact row of its own).
+    /// </summary>
+    private bool Header(Rect r, bool slim)
     {
         var title = Searching ? Loc.T("Search") : ShelfName(_s.Selected);
         var count = Searching ? _s.Cards.Count : ShelfCount(_s.Selected);
@@ -131,15 +140,38 @@ public sealed partial class WindowFace
             chipsW += cw + P(8);
         }
 
+        // the slot filter goes at the right end, the kind chips left of it; when the two do not fit beside the title, the
+        // kinds fold into their dropdown, and when even that is too much the slot filter takes a row of its own
         var titleRoom = r.W - countW - P(12);
-        var dropdown  = slim || kinds.Count > 0 && chipsW > r.W - Math.Min(_c.Measure(title, style).X, titleRoom) - countW - P(28);
+        var titleNeed = Math.Min(_c.Measure(title, style).X, Math.Max(P(90), titleRoom * 0.4f));
+        var slotW     = SlotButtonShown ? SlotButtonWidth() + P(10) : 0;
+        var room      = r.W - titleNeed - countW - P(28);
+        var dropdown  = slim || kinds.Count > 0 && chipsW + slotW > room;
+        var kindW     = kinds.Count == 0 ? 0 : dropdown ? KindDropdownWidth() : chipsW - P(8);
+        var ownRow    = slotW > 0 && kindW + slotW > room;
         float rightW  = 0;
+        if (slotW > 0 && !ownRow)
+        {
+            var sw = slotW - P(10);
+            SlotButton(new Rect(r.Right - sw, r.Center.Y - P(15), sw, P(30)));
+            rightW += slotW;
+        }
+
+        var kr = r with { W = r.W - rightW };
         if (kinds.Count > 0)
-            rightW = dropdown ? KindDropdown(r, slim) + P(12) : KindChips(r, widths) + P(12);
+            rightW += dropdown ? KindDropdown(kr, slim) + P(12) : KindChips(kr, widths) + P(12);
 
         var titleW = Painter.TextIn(_c, new Rect(r.X, r.Y, r.W - rightW - countW - P(12), r.H), title, style, Theme.Text);
         var baseOff = slim ? P(2) : P(4);
         Painter.TextIn(_c, new Rect(r.X + titleW + (slim ? P(8) : P(12)), r.Y + baseOff, countW + 1, r.H), countText, cs, Theme.Muted);
+        return ownRow;
+    }
+
+    private float KindDropdownWidth()
+    {
+        var current = _s.Kinds.FirstOrDefault(k => k.Id == _s.Kind) ?? _s.Kinds[0];
+        var label   = current.Id.Length == 0 ? Loc.T("All kinds") : KindLabel(current);
+        return _c.Measure(label, Theme.Caption).X + P(24 + 18);
     }
 
     private string KindLabel(KindChip k)
@@ -173,6 +205,77 @@ public sealed partial class WindowFace
         }
 
         return total;
+    }
+
+    private bool SlotButtonShown
+        => _s.SlotChips.Count > 0 || _s.SlotChip.Length > 0;
+
+    /// <summary> The slot filter's text: "Slot: All" while nothing is chosen, else just the pick ("Wrist slot"). </summary>
+    private string SlotButtonLabel()
+    {
+        if (_s.SlotChip.Length == 0)
+            return Loc.F("Slot: {0}", Loc.T("All"));
+        return _s.SlotChips.FirstOrDefault(k => k.Id == _s.SlotChip)?.Name ?? _s.SlotChip;
+    }
+
+    private float SlotButtonWidth()
+        => P(12) + P(14) + P(6) + _c.Measure(SlotButtonLabel(), Theme.Caption).X + P(8) + (_s.SlotChip.Length > 0 ? P(22) : P(18)) + P(4);
+
+    /// <summary>
+    /// The slot filter: one dropdown button ("Slot: All ▾"). Its menu lists All and every slot with its count; a pick
+    /// closes the menu and the button then shows just the pick ("Wrist slot"), in the chosen style, with a small ×
+    /// that goes back to all.
+    /// </summary>
+    private void SlotButton(Rect box)
+    {
+        Stats.Places["slot-filter"] = box;
+        var chosen = _s.SlotChip.Length > 0;
+        var label  = SlotButtonLabel();
+        var close  = chosen ? new Rect(box.Right - P(26), box.Y + (box.H - P(22)) / 2, P(22), P(22)) : default;
+        if (chosen)
+            Stats.Places["slot-clear"] = close;
+        var cresp  = chosen ? _ui.Interact("slot-clear", close) : default;
+        var resp   = _ui.Interact("slot-filter", box);
+        var open   = _ui.IsOpen(PopSlotChips);
+        _c.FillRect(box, chosen || open ? Theme.Picked : resp.Hovered ? Theme.HoverWash : Colr.Transparent, box.H / 2);
+        if (!chosen && !open)
+            _c.StrokeRect(box, Theme.Edge, box.H / 2, Math.Max(1, _u));
+        Painter.Icon(_c, Icons.Slots, new Vector2(box.X + P(12) + P(7), box.Center.Y), P(14), chosen ? Theme.Accent : Theme.Muted, 1.8f);
+        var tx = box.X + P(12) + P(14) + P(6);
+        var right = chosen ? close.X - P(2) : box.Right - P(26);
+        Painter.TextIn(_c, new Rect(tx, box.Y, right - tx, box.H), label, Theme.Caption, Theme.Text);
+        if (chosen)
+        {
+            if (cresp.Hovered)
+                _c.FillRect(close, Theme.HoverWash, P(11));
+            Painter.Icon(_c, Icons.Close, close.Center, P(11), cresp.Hovered ? Theme.Text : Theme.Muted, 2);
+            _ui.Tip("slot-clear", close, Loc.T("All slots"));
+            if (cresp.Clicked)
+            {
+                _s.SlotChip = string.Empty;
+                return;
+            }
+        }
+        else
+            Painter.Icon(_c, Icons.ChevronD, new Vector2(box.Right - P(16), box.Center.Y), P(12), Theme.Muted, 2);
+
+        if (resp.Clicked && !cresp.Hovered)
+        {
+            if (open)
+                _ui.ClosePopup();
+            else
+                _ui.OpenPopup(PopSlotChips, new Vector2(box.X, box.Bottom + P(6)));
+        }
+    }
+
+    /// <summary> The slot filter's menu: All, then every slot with its count. </summary>
+    private void SlotChipsMenu()
+    {
+        var items = new List<MenuItem> { new("slot:", Loc.T("All")) { Checked = _s.SlotChip.Length == 0 } };
+        items.AddRange(_s.SlotChips.Select(k => new MenuItem("slot:" + k.Id, $"{k.Name} {Num(k.Count)}") { Checked = k.Id == _s.SlotChip }));
+        var picked = Menu.Draw(_ui, PopSlotChips, _ui.PopupAnchor, items, 180);
+        if (picked is not null)
+            _s.SlotChip = picked.Id[5..];
     }
 
     /// <summary> When the chips do not fit (and in the slim window): one chip that opens a menu of kinds. </summary>
@@ -734,6 +837,8 @@ public sealed partial class WindowFace
 
         if (card.Unsure)
             UnsureMark(card, new Vector2(pic.X + P(8), pic.Bottom - P(8)));
+        if (card.SlotName.Length > 0)
+            SlotMark(card, pic, mark.Length > 0 ? Painter.MarkWidth(_c, mark, _u) : 0);
 
         var nameBox = new Rect(r.X + P(10), pic.Bottom, r.W - P(20), g.NameH);
         string fitted;
@@ -762,7 +867,10 @@ public sealed partial class WindowFace
         else if (index == _nav && _navShown)
             _c.StrokeRect(r.Expand(P(2)), Theme.Faint, P(14), P(2));
 
-        if (fitted != card.Name)
+        // the tooltip names the slot it is worn through (and the whole name when it is cut)
+        if (card.SlotName.Length > 0)
+            _ui.Tip(id, r, Loc.F("{0} · {1}", card.Name, card.SlotName));
+        else if (fitted != card.Name)
             _ui.Tip(id, r, card.Name);
         if (resp.Clicked)
         {
@@ -791,6 +899,36 @@ public sealed partial class WindowFace
     /// The closet is not sure about this card's shelf: a small, quiet gold "?" at the bottom left of the picture. The
     /// card stays here (its best guess) and also waits under To sort.
     /// </summary>
+    /// <summary>
+    /// The slot a card is worn through, small at the picture's top right ("Wrist slot"): dim as a rule, in the accent
+    /// colour when it is not the usual slot for the shelf (a jacket in the wrist slot). When it does not fit beside the
+    /// "On"/"New" mark: the slot icon alone (the card's tooltip names the slot).
+    /// </summary>
+    private void SlotMark(Card card, Rect pic, float leftMarkW)
+    {
+        var id    = "slot-mark/" + card.Key;
+        var h     = P(20);
+        var fg    = card.SlotUnusual ? Theme.OnAccent : Theme.Text.Fade(0.8f);
+        var fill  = card.SlotUnusual ? Theme.Accent : Theme.NoteFill;
+        var textW = _c.Measure(card.SlotName, Theme.MarkPlain).X + P(14);
+        var room  = pic.W - P(16) - (leftMarkW > 0 ? leftMarkW + P(6) : 0);
+        Rect box;
+        if (textW <= room)
+        {
+            box = new Rect(pic.Right - P(8) - textW, pic.Y + P(8), textW, h);
+            _c.FillRect(box, fill, P(6));
+            Painter.TextIn(_c, box.Inset(P(7), 0), card.SlotName, Theme.MarkPlain, fg, 0.5f);
+        }
+        else
+        {
+            box = new Rect(pic.Right - P(8) - h, pic.Y + P(8), h, h);
+            _c.FillRect(box, fill, P(6));
+            Painter.Icon(_c, Icons.Slots, box.Center, P(12), fg, 1.8f);
+        }
+
+        Stats.Places[id] = box;
+    }
+
     private void UnsureMark(Card card, Vector2 bottomLeft)
     {
         Stats.UnsureMarks++;

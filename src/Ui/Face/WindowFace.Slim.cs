@@ -36,10 +36,15 @@ public sealed partial class WindowFace
         }
 
         var header = new Rect(area.X + P(16), area.Y + P(10), area.W - P(32), P(32));
-        Header(header, true);
+        var slotRow = Header(header, true);
         var y = header.Bottom + P(8);
         var x = area.X + P(12);
         var w = area.W - P(24);
+        if (slotRow)
+        {
+            SlotButton(new Rect(x + P(4), y, Math.Min(w - P(4), SlotButtonWidth()), P(28)));
+            y += P(28) + P(8);
+        }
         if (_s.Suggestion is { } sug)
             y += Banner(new Rect(x, y, w, 0), sug, true) + P(10);
 

@@ -91,6 +91,18 @@ public sealed class Card
     /// </summary>
     public int Slots { get; init; } = 1;
 
+    /// <summary>
+    /// The game slot it is worn through, for gear ("Wrist slot", "Body slot"); with several slots the one a click would use
+    /// now. "" for things that are not worn through a gear slot (hair, faces, bodies, animations…). Translated.
+    /// </summary>
+    public string SlotName { get; init; } = string.Empty;
+
+    /// <summary>
+    /// It is worn through a slot that is not the usual one for its shelf (a jacket in the wrist slot, tights in the ring
+    /// slot), so faces mark the slot name.
+    /// </summary>
+    public bool SlotUnusual { get; init; }
+
     /// <summary> The user moved it here (so "Put back where the closet had it" is offered). </summary>
     public bool Moved { get; init; }
 
@@ -333,6 +345,19 @@ public interface IClosetSession
 
     /// <summary> The chosen kind chip ("" = all). </summary>
     string Kind { get; set; }
+
+    /// <summary>
+    /// One chip per game slot that the cards of the selected shelf (or the search results) are worn through, in the game's
+    /// order, with how many cards each ("Body slot" 40, "Wrist slot" 3); empty when they all use one slot. Id is the
+    /// socket's name ("wrists"). A card that can be worn through several slots counts for each.
+    /// </summary>
+    IReadOnlyList<KindChip> SlotChips => Array.Empty<KindChip>();
+
+    /// <summary>
+    /// The chosen slot chip ("" = all): <see cref="Cards"/> then holds only cards that can be worn through that slot. It
+    /// stays chosen across shelves and searches while any card there has that slot; otherwise it reads "" again.
+    /// </summary>
+    string SlotChip { get => string.Empty; set { } }
     IReadOnlyList<Card> Cards { get; }
 
     /// <summary>

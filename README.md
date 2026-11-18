@@ -4,7 +4,7 @@ Your [Penumbra](https://github.com/xivdev/Penumbra) mods as a closet. Mod Closet
 FINAL FANTASY XIV that sorts your mods onto shelves by what they are on you (tops, shoes, earrings, tails, nails…),
 lets you try one on with a click, and keeps it only when you say so.
 
-> **Status: test build (0.7.2).** It has been used on one large mod library. Expect rough edges, and please report them.
+> **Status: test build (0.7.3).** It has been used on one large mod library. Expect rough edges, and please report them.
 
 ## What it does
 
@@ -17,6 +17,8 @@ lets you try one on with a click, and keeps it only when you say so.
   tail or size before you keep it.
 - **Bodies, skin and makeup apart.** Body mods, skin textures, face sculpts and makeup each have their own shelf; a
   skin goes over the body you wear and makeup over the sculpt.
+- **Which slot a mod uses.** Every card names the game slot it is worn through, marked when it is unusual (a jacket
+  in the wrist slot), and a slot filter shows only the mods of one slot.
 - **Rings for either hand.** Rings sit on a right and a left shelf. A ring made for one hand can be copied into a mod
   of your own that is worn through the other ring slot, to free up a slot.
 - **A photo on every card.** The closet draws a picture of each piece itself, in the background: clothes, jewellery,

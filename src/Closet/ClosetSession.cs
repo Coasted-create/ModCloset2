@@ -1258,6 +1258,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         var kind = _kinds.Count > 0 ? _kind : string.Empty;
 
         // cards: the order is kept until something it depends on changes (a try only changes the marks)
+        List<LibPart>? leads = null;
         if (searching)
         {
             if (_searchDue is { } due && now < due)
@@ -1266,9 +1267,11 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             }
             else
             {
-                _searchDue = null;
-                _cards     = SearchCards(now);
+                _searchDue   = null;
+                _searchLeads = SearchLeads(now);
             }
+
+            leads = _searchLeads;
         }
         else if (_selected == Pieces.Outfits)
         {
@@ -1289,7 +1292,26 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
                 _orderedFor = (_orderStamp, _selected, kind, ShelfStamp(_selected));
             }
 
-            _cards = new LazyCards(Things(_ordered), p => MakeCard(p, now));
+            leads = Things(_ordered);
+        }
+
+        // the slot chips over these cards, and the one chosen
+        if (leads is not null)
+        {
+            var counts = SlotCounts(leads);
+            _slotChips = counts.Count < 2 ? Array.Empty<KindChip>()
+                : counts.OrderBy(kv => kv.Key).Select(kv => new KindChip { Id = SlotChipId(kv.Key), Name = SlotNameOf(kv.Key), Count = kv.Value }).ToList();
+            // a chip with no card here reads "" again: the grid is never left empty by it
+            if (_slotChip.Length > 0 && !counts.Keys.Any(k => SlotChipId(k) == _slotChip))
+                _slotChip = string.Empty;
+            var shown = _slotChip.Length == 0 ? leads : WithSlot(leads, _slotChip);
+            _cards = new LazyCards(shown, p => MakeCard(p, now));
+        }
+        else
+        {
+            _slotChips = Array.Empty<KindChip>();
+            if (_selected == Pieces.Outfits)
+                _slotChip = string.Empty;
         }
 
         var onHere = searching || _selected is Pieces.Outfits or Pieces.ToSort or Pieces.Hidden ? new List<LibPart>() : OnIn(_selected);
@@ -1478,6 +1500,8 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             IsNew      = Usage.IsNew(click.Mod.Since, Use(click), now),
             Versions   = click.VersionCount,
             Slots      = thing.Count,
+            SlotName   = SlotNameOf(click.Key.Socket),
+            SlotUnusual = IsGearSlot(click.Key.Socket) && UsualSlot(shelf) is { } usual && usual != click.Key.Socket,
             PartsInMod = _outfits.TryGetValue(part.Mod.Directory, out var set) && set.Any(p => LeadOf(p.Key) == lead) ? set.Count : 1,
             Moved      = thing.Any(p => _data.Moves.TryGetValue(p.KeyText, out var moved) && moved != p.Info.Piece && IsHome(moved)),
             Unsure     = thing.Any(p => _waitingSet.Contains(p.Key)),
@@ -1635,11 +1659,11 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     private SearchText.NameKey NameKeyOf(LibPart part)
         => _nameKeys.GetValue(part, static p => SearchText.KeyOf(p.Name));
 
-    private IReadOnlyList<Card> SearchCards(DateTime now)
+    private List<LibPart> SearchLeads(DateTime now)
     {
         var query = SearchText.Words(_search);
         if (query.Length == 0)
-            return Array.Empty<Card>();
+            return new List<LibPart>();
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var work  = false;
@@ -1647,9 +1671,12 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         {
             work       = true;
             _hitsWords = query;
+            // a slot's whole name ("wrist slot") also finds what is worn through it (not a part of the name: "wrist" alone
+            // finds names only)
+            var slot = SlotTyped(query);
             var hits = new HashSet<PartKey>();
             foreach (var part in _byKey.Values)
-                if (Hit(part))
+                if (Hit(part) || slot is { } typed && !_aside.ContainsKey(part.Key) && SlotHit(part, typed))
                     hits.Add(part.Key);
             _hits = hits;
             _hitsStamp++;
@@ -1709,8 +1736,163 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
 
         // a thing whose copy is a mod of its own is found only while it is on or tried on
         if (AsideShown(null).Where(Matches).ToList() is { Count: > 0 } aside)
-            return new LazyCards(Things(Order(aside, now).Concat(_searchOrdered).ToList()), p => MakeCard(p, now));
-        return new LazyCards(Things(_searchOrdered), p => MakeCard(p, now));
+            return Things(Order(aside, now).Concat(_searchOrdered).ToList());
+        return Things(_searchOrdered);
+    }
+
+    private List<LibPart> _searchLeads = new();
+
+    // ---- slots: the slot a card is worn through, and the slot chips ----
+
+    private IReadOnlyList<KindChip> _slotChips = Array.Empty<KindChip>();
+    private string _slotChip = string.Empty;
+
+    private static bool IsGearSlot(Socket socket)
+        => socket is >= Socket.Head and <= Socket.OffHand;
+
+    /// <summary> A slot chip's id: the socket's name ("wrists"). </summary>
+    private static string SlotChipId(Socket socket)
+        => socket.ToString().ToLowerInvariant();
+
+    /// <summary> A gear slot's name ("Wrist slot"), translated; "" for what is not worn through a gear slot. </summary>
+    private static string SlotNameOf(Socket socket)
+        => socket switch
+        {
+            Socket.MainHand => Loc.T("Main hand slot"),
+            Socket.OffHand  => Loc.T("Off hand slot"),
+            _ when IsGearSlot(socket) => KindNames.SlotLabel(socket),
+            _ => string.Empty,
+        };
+
+    /// <summary> The gear slots of a card's thing as a bit mask (bit = the socket's number). </summary>
+    private int SlotMask(LibPart part)
+    {
+        if (!_thingParts.TryGetValue(LeadOf(part.Key), out var thing))
+            return IsGearSlot(part.Key.Socket) ? 1 << (int)part.Key.Socket : 0;
+        var mask = 0;
+        foreach (var p in thing)
+            if (IsGearSlot(p.Key.Socket))
+                mask |= 1 << (int)p.Key.Socket;
+        return mask;
+    }
+
+    /// <summary> The gear slots a card's thing can be worn through (the part's own when it is a thing of its own). </summary>
+    private IEnumerable<Socket> SlotsOfThing(LibPart part)
+    {
+        var thing = ThingOf(part.Key);
+        if (thing.Count == 0)
+            return IsGearSlot(part.Key.Socket) ? new[] { part.Key.Socket } : Array.Empty<Socket>();
+        return thing.Select(p => p.Key.Socket).Where(IsGearSlot).Distinct();
+    }
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<List<LibPart>, Dictionary<Socket, int>> _slotCounts = new();
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<List<LibPart>, Dictionary<string, List<LibPart>>> _withSlot = new();
+
+    /// <summary> How many cards of a list can be worn through each gear slot (a card of several slots counts for each). </summary>
+    private Dictionary<Socket, int> SlotCounts(List<LibPart> leads)
+    {
+        if (_slotCounts.TryGetValue(leads, out var made))
+            return made;
+        // run after every detection batch over a whole shelf: no allocation per card, a bit mask of the gear slots
+        var counts = new int[(int)Socket.OffHand + 1];
+        foreach (var lead in leads)
+        {
+            var mask = SlotMask(lead);
+            for (var s = (int)Socket.Head; mask != 0 && s <= (int)Socket.OffHand; ++s)
+                if ((mask & (1 << s)) != 0)
+                {
+                    counts[s]++;
+                    mask &= ~(1 << s);
+                }
+        }
+
+        made = new Dictionary<Socket, int>();
+        for (var s = (int)Socket.Head; s <= (int)Socket.OffHand; ++s)
+            if (counts[s] > 0)
+                made[(Socket)s] = counts[s];
+        _slotCounts.AddOrUpdate(leads, made);
+        return made;
+    }
+
+    /// <summary> The cards of a list that can be worn through the chip's slot (made once per list and chip). </summary>
+    private List<LibPart> WithSlot(List<LibPart> leads, string chip)
+    {
+        var byChip = _withSlot.GetValue(leads, static _ => new Dictionary<string, List<LibPart>>());
+        if (!byChip.TryGetValue(chip, out var list))
+        {
+            var bit = Enum.GetValues<Socket>().Where(IsGearSlot).Where(s => SlotChipId(s) == chip).Select(s => 1 << (int)s).FirstOrDefault();
+            byChip[chip] = list = leads.Where(p => (SlotMask(p) & bit) != 0).ToList();
+        }
+        return list;
+    }
+
+    /// <summary> The gear slot whose whole name the search is ("wrist slot", "Armbandplatz"), in English or translated; else null. </summary>
+    private static Socket? SlotTyped(string[] words)
+    {
+        var typed = string.Concat(words);
+        for (var s = Socket.Head; s <= Socket.OffHand; ++s)
+        {
+            var english = s switch { Socket.MainHand => "Main hand slot", Socket.OffHand => "Off hand slot", _ => KindNames.SlotLabelEnglish(s) };
+            if (typed.Length > 0 && (SearchText.Squash(english) == typed || SearchText.Squash(SlotNameOf(s)) == typed))
+                return s;
+        }
+
+        return null;
+    }
+
+    private bool SlotHit(LibPart part, Socket slot)
+        => _shelfOf.TryGetValue(part.Key, out var shelf) && shelf != Pieces.Hidden && SlotsOfThing(part).Contains(slot);
+
+    private readonly Dictionary<string, (int Stamp, Socket? Slot)> _usualSlots = new();
+
+    /// <summary>
+    /// The slot a shelf's things are usually worn through: the shelf's own (Tops: the body slot, Bracelets: the wrist slot,
+    /// both ring views: the ring slot), else the slot most of its cards use (Legwear, a shelf of the user's). Null: none.
+    /// </summary>
+    private Socket? UsualSlot(string shelf)
+    {
+        if (IsRingShelf(shelf))
+            return Socket.Rings;
+        for (var s = Socket.Head; s <= Socket.Rings; ++s)
+            if (PartBuilder.ShelfOf(s) == shelf)
+                return s;
+
+        var stamp = ShelfStamp(shelf);
+        if (_usualSlots.TryGetValue(shelf, out var known) && known.Stamp == stamp)
+            return known.Slot;
+        var counts = new Dictionary<Socket, int>();
+        foreach (var lead in OnePerThing(ShelfParts(shelf)))
+            foreach (var slot in SlotsOfThing(lead))
+                counts[slot] = counts.GetValueOrDefault(slot) + 1;
+        Socket? usual = counts.Count == 0 ? null : counts.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key).First().Key;
+        _usualSlots[shelf] = (stamp, usual);
+        return usual;
+    }
+
+    public IReadOnlyList<KindChip> SlotChips
+    {
+        get
+        {
+            Sync();
+            return _slotChips;
+        }
+    }
+
+    public string SlotChip
+    {
+        get
+        {
+            Sync();
+            return _slotChip;
+        }
+        set
+        {
+            value ??= string.Empty;
+            if (value == _slotChip)
+                return;
+            _slotChip = value;
+            Changed();
+        }
     }
 
     /// <summary> Kind chips: a shelf with 40 or more parts and at least two kinds with 5 or more each (SPEC). </summary>
