@@ -1,0 +1,28 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Download Dalamud
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile dalamud.zip
+          Expand-Archive dalamud.zip -DestinationPath "$env:AppData\XIVLauncher\addon\Hooks\dev"
+      - name: Build
+        run: dotnet build ModCloset2.csproj -c Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ModCloset2
+          path: |
+            bin/Release/ModCloset2.dll
+            bin/Release/ModCloset2.json
