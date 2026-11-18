@@ -36,6 +36,26 @@ public static class WindowGeometry
         return (p, s);
     }
 
+    /// <summary>
+    /// Where the options panel goes: against the closet's right edge, or its left edge when the screen has no room on the
+    /// right; when neither side has room, on the side with more room, kept on the screen (it may cover the closet's
+    /// edge). Its top is the closet's top, kept on the screen too.
+    /// </summary>
+    public static Vector2 PanelPos(Rect closet, Vector2 panel, Rect screen, float gap)
+    {
+        var rightX = closet.Right + gap;
+        var leftX  = closet.X - gap - panel.X;
+        float x;
+        if (rightX + panel.X <= screen.Right)
+            x = rightX;
+        else if (leftX >= screen.X)
+            x = leftX;
+        else
+            x = screen.Right - closet.Right >= closet.X - screen.X ? screen.Right - panel.X : screen.X;
+        var y = Math.Clamp(closet.Y, screen.Y, Math.Max(screen.Y, screen.Bottom - panel.Y));
+        return new Vector2(Math.Max(screen.X, x), y);
+    }
+
     /// <summary> Size of ImGui's resize grip in the bottom-right corner (as ImGui 1.88 computes it). </summary>
     public static float GripSize(float fontSize, float windowRounding)
         => MathF.Floor(MathF.Max(fontSize * 1.35f, windowRounding + 1 + fontSize * 0.2f));

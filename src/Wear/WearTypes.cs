@@ -96,6 +96,13 @@ public enum RestoreTurn
 public static class WearRules
 {
     /// <summary>
+    /// After an option write: redraw now, unless another option write is waiting right behind it (that one redraws once
+    /// both are in, so the second does not wait for the first one's redraw to settle).
+    /// </summary>
+    public static bool RedrawAfterOptions(bool optionWriteNext)
+        => !optionWriteNext;
+
+    /// <summary>
     /// The highest priority among the mods that are on, as Penumbra uses them: a mod another plugin holds a temporary
     /// setting for counts with that setting (on or off, its priority), every other one with the collection's. 0 when none.
     /// </summary>

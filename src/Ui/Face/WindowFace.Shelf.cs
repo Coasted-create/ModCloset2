@@ -302,6 +302,7 @@ public sealed partial class WindowFace
     // thing is still on, else the first
     private string _shownShelf = string.Empty;
     private PartKey? _shownKey;
+    private PartKey? _shownWant;
 
     /// <summary> The thing the strip shows, its place among everything on the shelf, and how many there are. </summary>
     private (WearingInfo? Shown, int Index, int Count) ShownWearing()
@@ -317,6 +318,14 @@ public sealed partial class WindowFace
         {
             _shownShelf = _s.Selected;
             _shownKey   = null;
+            _shownWant  = null;
+        }
+
+        // a card just clicked: the strip (and the panel) turn to it once the session lists it
+        if (_shownWant is { } want && all.Any(w => w.Key == want))
+        {
+            _shownKey  = want;
+            _shownWant = null;
         }
 
         var index = 0;
@@ -431,161 +440,75 @@ public sealed partial class WindowFace
         var pic     = new Rect(r.X + P(14) + (switchW > 0 ? switchW + P(14) : 0), r.Center.Y - P(24), P(48), P(48));
         PictureTile("wearing/" + wearing.Key, wearing.Key, pic, wearing.Picture, wearing.Icon, wearing.Name, P(10), Corners.All, P(26), 1.4f, Colr.Hex(0xF4ECF2, 0.45f));
 
-        // like the mockup's flex row: the name column is 200 wide, the options take what they need, the colour bar
-        // gets the rest (up to 320); when crowded the name column gives way first, then the options fold into "+n"
-        var x       = pic.Right + P(18);
-        var right   = r.Right - P(14);
-        var avail   = right - x;
-        var chips   = WearingChips(wearing);
-        var live    = ShownColours(wearing, shownIndex);
-        var hasBar  = live is not null;
-        var optW    = chips.Count == 0 ? 0 : chips.Sum(ChipWidth) + P(6) * (chips.Count - 1);
-        var optNeed = chips.Count > 0 ? optW + P(18) : 0;
-        var nameW   = P(200);
-        var barW    = 0f;
-        if (chips.Count == 0 && !hasBar)
-            nameW = avail;
-        else if (avail < nameW + P(18) + (hasBar ? P(100) + P(18) : 0) + optNeed)
+        // the options and the colour bar live in the panel beside the closet; here one button opens it
+        var x     = pic.Right + P(18);
+        var right = r.Right - P(14);
+        if (PanelHasMore(wearing, shownIndex))
         {
-            // crowded: the name column and the bar shrink before the options fold away
-            nameW = Math.Clamp(avail - optNeed - (hasBar ? P(72) + P(18) : 0) - P(18), P(96), P(200));
+            var bw  = Math.Min(PanelButtonWidth(true), Math.Max(P(36), right - x - P(120)));
+            var btn = new Rect(right - bw, r.Center.Y - P(17), bw, P(34));
+            PanelButton(btn);
+            right = btn.X - P(18);
         }
-
-        if (hasBar)
-            barW = Math.Clamp(avail - nameW - P(18) - optNeed, P(72), P(320));
 
         var labelH  = _c.LineHeight(Theme.Label);
         var strongH = _c.LineHeight(Theme.Strong);
+        var nameW   = Math.Max(P(40), right - x);
         var colY    = r.Center.Y - (labelH + P(2) + strongH) / 2;
         Painter.TextIn(_c, new Rect(x, colY, nameW, labelH), WearingLabel(wearing, shownCount, false), Theme.Label, Theme.Muted);
-        var nameResp = _ui.Interact("wearing-name", new Rect(x, colY + labelH, nameW, strongH), false);
-        var fitted   = Painter.Fit(_c, wearing.Name, nameW, Theme.Strong);
+        var fitted = Painter.Fit(_c, wearing.Name, nameW, Theme.Strong);
         _c.Text(new Vector2(x, colY + labelH + P(2)), fitted, Theme.Strong, Theme.Text);
-        if (fitted != wearing.Name && nameResp.Hovered)
-            _ui.Tip("wearing-name", new Rect(x, colY, nameW, labelH + strongH), wearing.Name);
-        x += nameW + P(18);
-
-        if (hasBar)
-        {
-            var col = new Rect(x, r.Center.Y - (labelH + P(7) + P(16)) / 2, barW, labelH + P(7) + P(16));
-            Painter.TextIn(_c, new Rect(col.X, col.Y, col.W, labelH), Loc.T("Colours"), Theme.Label, Theme.Muted);
-            LiveBar(live!, new Rect(col.X, col.Y + labelH + P(7), col.W, P(16)), P(8), Theme.Rail, wholeButton: true);
-            x += barW + P(18);
-        }
-
-        if (chips.Count == 0)
-            return;
-        var top   = r.Center.Y - (labelH + P(5) + P(26)) / 2;
-        var label = wearing.Options.Count > 0 || chips.Count > 1 ? Loc.T("Options") : chips[0].Slot ? Loc.T("Slot") : Loc.T("Version");
-        Painter.TextIn(_c, new Rect(x, top, right - x, labelH), label, Theme.Label, Theme.Muted);
-        ChipRow(new Rect(x, top + labelH + P(5), right - x, P(26)), wearing, chips);
+        WearingOpens(new Rect(pic.X, r.Y, x + nameW - pic.X, r.H), wearing, fitted);
     }
 
-    /// <summary> An option group or the version, as one chip on the strip. </summary>
-    private sealed record StripChip(string Label, string Value, OptionChip? Option, bool Slot = false);
-
-    private List<StripChip> WearingChips(WearingInfo wearing)
+    /// <summary> The strip's picture and name: a click opens the options panel on the thing shown. </summary>
+    private void WearingOpens(Rect r, WearingInfo wearing, string fitted)
     {
-        var slots = _s.SlotsOf(wearing.Key);
-        var list = new List<StripChip>();
-        // the mod's own groups first, then those the closet picks to fit the body ("Automatic" while nobody chose)
-        foreach (var o in wearing.Options.Where(o => !o.Fits).Concat(wearing.Options.Where(o => o.Fits)))
-        {
-            var value = o.Multi
-                ? o.On.Count switch { 0 => Loc.T("none"), 1 => o.On[0], _ => Loc.F("{0} on", o.On.Count) }
-                : o.On.FirstOrDefault() ?? string.Empty;
-            if (o.Automatic)
-                value = value.Length > 0 ? Loc.F("Automatic ({0})", value) : Loc.T("Automatic");
-            list.Add(new StripChip(o.Group, value, o));
-        }
-
-        // with options or slots around it the chip says "Version"; alone, the label above it already does
-        if (wearing.Versions > 1)
-            list.Add(new StripChip(wearing.Options.Count > 0 || slots.Count > 0 ? Loc.T("Version") : string.Empty, Loc.F("{0} of {1}", wearing.Version + 1, wearing.Versions), null));
-
-        // the slot it is worn through, when its mod offers it in several ("Ring slot ▾")
-        if (slots.Count > 0)
-        {
-            var shown = slots.FirstOrDefault(c => c.On) ?? slots.FirstOrDefault(c => c.Next) ?? slots[0];
-            list.Add(new StripChip(string.Empty, shown.Name, null, true));
-        }
-
-        return list;
+        Stats.Places["wearing-open"] = r;
+        var resp = _ui.Interact("wearing-open", r);
+        if (resp.Hovered)
+            _c.FillRect(r, Theme.HoverWash, P(10));
+        _ui.Tip("wearing-open", r, fitted != wearing.Name ? Loc.F("{0} · {1}", wearing.Name, Loc.T("Options & colours")) : Loc.T("Options & colours"));
+        if (resp.Clicked)
+            OpenPanelOn(wearing.Key);
     }
 
-    /// <summary> Chips in one line; those that do not fit go into a last "+n" chip with a menu. </summary>
-    private void ChipRow(Rect r, WearingInfo wearing, List<StripChip> chips)
+    /// <summary> Is there anything for the panel beyond the picture and name: options, versions, slots or a colour bar? </summary>
+    private bool PanelHasMore(WearingInfo wearing, int index)
+        => wearing.Options.Count > 0 || wearing.Versions > 1 || _s.SlotsOf(wearing.Key).Count > 0 || ShownColours(wearing, index) is not null;
+
+    private float PanelButtonWidth(bool words)
+        => words ? P(12) + P(14) + P(8) + _c.Measure(Loc.T("Options & colours"), Theme.Caption).X + P(14) : P(34);
+
+    /// <summary>
+    /// "Options & colours" on the strip: opens the panel beside the closet (and closes it again), so nothing is lost
+    /// when the panel was closed. Only the sliders icon when the strip is short of room.
+    /// </summary>
+    private void PanelButton(Rect box)
     {
-        var widths = chips.Select(ch => ChipWidth(ch)).ToList();
-        var x      = r.X;
-        for (var i = 0; i < chips.Count; ++i)
+        Stats.Places["panel-open"] = box;
+        var resp   = _ui.Interact("panel-open", box);
+        var shown  = PanelShown;
+        _c.FillRect(box, shown ? Theme.Picked : resp.Hovered ? Theme.Picked : Theme.Chip, P(8));
+        if (shown)
+            _c.StrokeRect(box, Theme.Accent.Fade(0.6f), P(8), Math.Max(1, _u));
+        var fg    = shown ? Theme.Accent : resp.Hovered ? Theme.Text : Theme.Text.Fade(0.85f);
+        var words = box.W >= PanelButtonWidth(true) - 0.5f;
+        if (words)
         {
-            var rest    = chips.Count - i - 1;
-            var moreW   = rest > 0 ? _c.Measure(Loc.F("+{0}", rest), Theme.Caption).X + P(20) + P(6) : 0;
-            var fits    = x + widths[i] + moreW <= r.Right || rest == 0 && x + widths[i] <= r.Right;
-            if (!fits)
-            {
-                var more = chips.Count - i;
-                var mw   = _c.Measure(Loc.F("+{0}", more), Theme.Caption).X + P(20);
-                var box  = new Rect(x, r.Y, mw, r.H);
-                Stats.Places["chip-more"] = box;
-                var resp = _ui.Interact("chip-more", box);
-                _c.FillRect(box, resp.Hovered ? Theme.Picked : Theme.Chip, P(7));
-                Painter.TextIn(_c, box, Loc.F("+{0}", more), Theme.Caption, Theme.Text, 0.5f);
-                _ui.Tip("chip-more", box, Loc.T("More options"));
-                if (resp.Clicked)
-                    _ui.OpenPopup(PopMore, new Vector2(box.X, box.Bottom + P(6)), (wearing, chips.Skip(i).ToList()));
-                return;
-            }
-
-            StripChipButton(new Rect(x, r.Y, widths[i], r.H), wearing, chips[i], i);
-            x += widths[i] + P(6);
+            Painter.Icon(_c, Icons.Settings, new Vector2(box.X + P(12) + P(7), box.Center.Y), P(14), fg, 1.8f);
+            Painter.TextIn(_c, new Rect(box.X + P(12) + P(14) + P(8), box.Y, box.W - P(12) - P(14) - P(8), box.H), Loc.T("Options & colours"), Theme.Caption, fg);
         }
-    }
+        else
+            Painter.Icon(_c, Icons.Settings, box.Center, P(16), fg, 1.8f);
 
-    private float ChipWidth(StripChip ch)
-        => P(10) + (ch.Option is { Fits: true } ? P(16) : 0) + (ch.Label.Length > 0 ? _c.Measure(ch.Label, Theme.Caption).X + P(6) : 0) + Math.Min(P(140), _c.Measure(ch.Value, Theme.Caption).X) + P(6) + P(12) + P(8);
-
-    private void StripChipButton(Rect box, WearingInfo wearing, StripChip chip, int index)
-    {
-        var id   = "chip/" + index;
-        Stats.Places[id] = box;
-        var resp = _ui.Interact(id, box);
-        var open = chip.Slot ? _ui.IsOpen(PopSlots) : _ui.IsOpen(PopOption) && _ui.PopupContext is ValueTuple<WearingInfo, OptionChip> ctx && ctx.Item2 == chip.Option;
-        _c.FillRect(box, resp.Hovered || open ? Theme.Picked : Theme.Chip, P(7));
-        var x = box.X + P(10);
-        if (chip.Option is { Fits: true })
-        {
-            // the quiet "fits your body" mark: a small figure before the group's name
-            Painter.Icon(_c, Icons.Bodies, new Vector2(x + P(6), box.Center.Y), P(12), Theme.Muted, 1.6f);
-            x += P(16);
-        }
-
-        if (chip.Label.Length > 0)
-        {
-            var lw = _c.Measure(chip.Label, Theme.Caption).X;
-            Painter.TextIn(_c, new Rect(x, box.Y, lw, box.H), chip.Label, Theme.Caption, Theme.Muted);
-            x += lw + P(6);
-        }
-
-        var vw = box.Right - P(8 + 12 + 6) - x;
-        Painter.TextIn(_c, new Rect(x, box.Y, vw, box.H), chip.Value, Theme.Caption, Theme.Text);
-        var chevron = chip.Option is null && !chip.Slot ? Icons.ChevronR : Icons.ChevronD;
-        Painter.Icon(_c, chevron, new Vector2(box.Right - P(8) - P(6), box.Center.Y), P(12), Theme.Muted, 2);
-        if (chip.Option is { Fits: true })
-            _ui.Tip(id, box, Loc.T("Picked to fit your body"));
-        else if (chip.Option is null && !chip.Slot)
-            _ui.Tip(id, box, Loc.T("Next version"));
-        else if (chip.Slot)
-            _ui.Tip(id, box, Loc.T("Wear on another slot"));
+        _ui.Tip("panel-open", box, shown ? Loc.T("Close the options and colours") : Loc.T("Show the options and colours beside the closet"));
         if (!resp.Clicked)
             return;
-        if (chip.Slot)
-            _ui.OpenPopup(PopSlots, new Vector2(box.X, box.Bottom + P(6)), wearing.Key);
-        else if (chip.Option is { } option)
-            _ui.OpenPopup(PopOption, new Vector2(box.X, box.Bottom + P(6)), (wearing, option));
+        if (shown)
+            ClosePanel();
         else
-            _s.SetVersion(wearing.Key, (wearing.Version + 1) % Math.Max(1, wearing.Versions));
+            OpenPanelOn(_shownKey);
     }
 
     /// <summary> The piece's colours as one bar of segments sized by their share (not clickable yet). </summary>
@@ -854,14 +777,14 @@ public sealed partial class WindowFace
             UnsureMark(card, new Vector2(pic.X + P(8), pic.Bottom - P(8)));
         if (optionsW > 0)
             OptionsMark(card, new Rect(leftX, pic.Bottom - P(8) - P(20), optionsW, P(20)));
-        if (card.SlotName.Length > 0)
-            SlotMark(card, pic, mark.Length > 0 ? Painter.MarkWidth(_c, mark, _u) : 0);
+        var slotNamed = card.SlotName.Length > 0 && SlotMark(card, pic, mark.Length > 0 ? Painter.MarkWidth(_c, mark, _u) : 0);
 
         var nameBox = new Rect(r.X + P(10), pic.Bottom, r.W - P(20), g.NameH);
         string fitted;
         // what tells cards of one mod apart ("Jacket", "Wrist slot"; on Everything else the kind), on every shelf
         // (a ring with files for one ring slot only says so when nothing else is said)
-        var label  = card.KindName.Length > 0 ? card.KindName : HandOnly(card);
+        // ("Left ring slot only" only when the slot mark does not already say "Left ring slot")
+        var label  = card.KindName.Length > 0 ? card.KindName : slotNamed ? string.Empty : HandOnly(card);
         var second = !Searching ? label : label.Length > 0 ? Loc.F("{0} · {1}", card.PieceName, label) : card.PieceName;
         if (g.NameH > (slim ? P(36) : P(40)))
         {
@@ -894,6 +817,9 @@ public sealed partial class WindowFace
         {
             _nav      = index;
             _navShown = false;
+            // a click on a mod opens the options panel on it (also on one that is on already)
+            if (card.State != CardState.Trying)
+                OpenPanelOn(card.Key);
             switch (card.State)
             {
                 case CardState.On:
@@ -922,7 +848,7 @@ public sealed partial class WindowFace
     /// colour when it is not the usual slot for the shelf (a jacket in the wrist slot). When it does not fit beside the
     /// "On"/"New" mark: the slot icon alone (the card's tooltip names the slot).
     /// </summary>
-    private void SlotMark(Card card, Rect pic, float leftMarkW)
+    private bool SlotMark(Card card, Rect pic, float leftMarkW)
     {
         var id    = "slot-mark/" + card.Key;
         var h     = P(20);
@@ -945,6 +871,7 @@ public sealed partial class WindowFace
         }
 
         Stats.Places[id] = box;
+        return textW <= room;
     }
 
     /// <summary> "Options: Sleeves, Back": what the "Options" mark and the card's tooltip say. </summary>

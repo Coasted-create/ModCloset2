@@ -1300,8 +1300,9 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         {
             var counts = SlotCounts(leads);
             _slotChips = counts.Count < 2 ? Array.Empty<KindChip>()
-                : counts.OrderBy(kv => kv.Key).Select(kv => new KindChip { Id = SlotChipId(kv.Key), Name = SlotNameOf(kv.Key), Count = kv.Value }).ToList();
-            // a chip with no card here reads "" again: the grid is never left empty by it
+                : SlotOrder.Where(counts.ContainsKey).Select(b => new KindChip { Id = SlotChipId(b), Name = SlotBitName(b), Count = counts[b] }).ToList();
+            // a chip with no card here reads "" again: the grid is never left empty by it (nor a chip of an older version,
+            // "rings", which no slot has now)
             if (_slotChip.Length > 0 && !counts.Keys.Any(k => SlotChipId(k) == _slotChip))
                 _slotChip = string.Empty;
             var shown = _slotChip.Length == 0 ? leads : WithSlot(leads, _slotChip);
@@ -1500,7 +1501,8 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             IsNew      = Usage.IsNew(click.Mod.Since, Use(click), now),
             Versions   = click.VersionCount,
             Slots      = thing.Count,
-            SlotName   = SlotNameOf(click.Key.Socket),
+            SlotName   = click.Key.Socket == Socket.Rings ? SlotBitName(HandsOf(click) switch { Hands.Right => (int)Socket.Rings, Hands.Left => RingLeftBit, _ => AllRings })
+                : SlotNameOf(click.Key.Socket),
             OptionGroups = OptionGroupsOf(thing),
             SlotUnusual = IsGearSlot(click.Key.Socket) && UsualSlot(shelf) is { } usual && usual != click.Key.Socket,
             PartsInMod = _outfits.TryGetValue(part.Mod.Directory, out var set) && set.Any(p => LeadOf(p.Key) == lead) ? set.Count : 1,
@@ -1751,9 +1753,49 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     private static bool IsGearSlot(Socket socket)
         => socket is >= Socket.Head and <= Socket.OffHand;
 
-    /// <summary> A slot chip's id: the socket's name ("wrists"). </summary>
-    private static string SlotChipId(Socket socket)
-        => socket.ToString().ToLowerInvariant();
+    // The slots as the chips and the search tell them apart: one bit per gear socket (its number), the ring slot split by
+    // hand: the right ring slot is the rings' socket bit, the left one a bit of its own after the weapons.
+    private const int RingLeftBit = 12;
+
+    /// <summary> Both ring slots (a chip value meaning "Ring slot": a ring for both hands, or the search for "ring slot"). </summary>
+    private const int AllRings = -1;
+
+    /// <summary> The chips' order: the game's slots, clothes first, the right ring slot before the left, the weapons last. </summary>
+    private static readonly int[] SlotOrder = { 1, 2, 3, 4, 5, 6, 7, 8, (int)Socket.Rings, RingLeftBit, 10, 11 };
+
+    /// <summary> A slot chip's id: the socket's name ("wrists"); "rings-right" and "rings-left" for the two ring slots. </summary>
+    private static string SlotChipId(int bit)
+        => bit switch
+        {
+            (int)Socket.Rings => "rings-right",
+            RingLeftBit       => "rings-left",
+            _                 => ((Socket)bit).ToString().ToLowerInvariant(),
+        };
+
+    /// <summary> A slot bit's name, translated: "Right ring slot", "Left ring slot", "Ring slot" for both; else the slot's. </summary>
+    private static string SlotBitName(int bit)
+        => bit switch
+        {
+            (int)Socket.Rings => Loc.T("Right ring slot"),
+            RingLeftBit       => Loc.T("Left ring slot"),
+            AllRings          => KindNames.SlotLabel(Socket.Rings),
+            _                 => SlotNameOf((Socket)bit),
+        };
+
+    private static string SlotBitEnglish(int bit)
+        => bit switch
+        {
+            (int)Socket.Rings => "Right ring slot",
+            RingLeftBit       => "Left ring slot",
+            AllRings          => KindNames.SlotLabelEnglish(Socket.Rings),
+            (int)Socket.MainHand => "Main hand slot",
+            (int)Socket.OffHand  => "Off hand slot",
+            _                 => KindNames.SlotLabelEnglish((Socket)bit),
+        };
+
+    /// <summary> The bits of a slot: a socket's own, both ring bits for "Ring slot". </summary>
+    private static int MaskOf(int bit)
+        => bit == AllRings ? 1 << (int)Socket.Rings | 1 << RingLeftBit : 1 << bit;
 
     /// <summary> A gear slot's name ("Wrist slot"), translated; "" for what is not worn through a gear slot. </summary>
     private static string SlotNameOf(Socket socket)
@@ -1765,17 +1807,24 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             _ => string.Empty,
         };
 
-    /// <summary> The gear slots of a card's thing as a bit mask (bit = the socket's number). </summary>
+    /// <summary>
+    /// The gear slots of a card's thing as a bit mask (bit = the socket's number; a ring made for one hand only that hand's
+    /// ring bit, one for both hands both).
+    /// </summary>
     private int SlotMask(LibPart part)
     {
         if (!_thingParts.TryGetValue(LeadOf(part.Key), out var thing))
-            return IsGearSlot(part.Key.Socket) ? 1 << (int)part.Key.Socket : 0;
+            return PartMask(part);
         var mask = 0;
         foreach (var p in thing)
-            if (IsGearSlot(p.Key.Socket))
-                mask |= 1 << (int)p.Key.Socket;
+            mask |= PartMask(p);
         return mask;
     }
+
+    private int PartMask(LibPart part)
+        => part.Key.Socket == Socket.Rings
+            ? HandsOf(part) switch { Hands.Right => 1 << (int)Socket.Rings, Hands.Left => 1 << RingLeftBit, _ => MaskOf(AllRings) }
+            : IsGearSlot(part.Key.Socket) ? 1 << (int)part.Key.Socket : 0;
 
     /// <summary> The gear slots a card's thing can be worn through (the part's own when it is a thing of its own). </summary>
     private IEnumerable<Socket> SlotsOfThing(LibPart part)
@@ -1786,20 +1835,20 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         return thing.Select(p => p.Key.Socket).Where(IsGearSlot).Distinct();
     }
 
-    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<List<LibPart>, Dictionary<Socket, int>> _slotCounts = new();
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<List<LibPart>, Dictionary<int, int>> _slotCounts = new();
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<List<LibPart>, Dictionary<string, List<LibPart>>> _withSlot = new();
 
     /// <summary> How many cards of a list can be worn through each gear slot (a card of several slots counts for each). </summary>
-    private Dictionary<Socket, int> SlotCounts(List<LibPart> leads)
+    private Dictionary<int, int> SlotCounts(List<LibPart> leads)
     {
         if (_slotCounts.TryGetValue(leads, out var made))
             return made;
         // run after every detection batch over a whole shelf: no allocation per card, a bit mask of the gear slots
-        var counts = new int[(int)Socket.OffHand + 1];
+        var counts = new int[RingLeftBit + 1];
         foreach (var lead in leads)
         {
             var mask = SlotMask(lead);
-            for (var s = (int)Socket.Head; mask != 0 && s <= (int)Socket.OffHand; ++s)
+            for (var s = (int)Socket.Head; mask != 0 && s <= RingLeftBit; ++s)
                 if ((mask & (1 << s)) != 0)
                 {
                     counts[s]++;
@@ -1807,10 +1856,10 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
                 }
         }
 
-        made = new Dictionary<Socket, int>();
-        for (var s = (int)Socket.Head; s <= (int)Socket.OffHand; ++s)
+        made = new Dictionary<int, int>();
+        for (var s = (int)Socket.Head; s <= RingLeftBit; ++s)
             if (counts[s] > 0)
-                made[(Socket)s] = counts[s];
+                made[s] = counts[s];
         _slotCounts.AddOrUpdate(leads, made);
         return made;
     }
@@ -1821,28 +1870,29 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         var byChip = _withSlot.GetValue(leads, static _ => new Dictionary<string, List<LibPart>>());
         if (!byChip.TryGetValue(chip, out var list))
         {
-            var bit = Enum.GetValues<Socket>().Where(IsGearSlot).Where(s => SlotChipId(s) == chip).Select(s => 1 << (int)s).FirstOrDefault();
+            var bit = SlotOrder.Where(b => SlotChipId(b) == chip).Select(b => 1 << b).FirstOrDefault();
             byChip[chip] = list = leads.Where(p => (SlotMask(p) & bit) != 0).ToList();
         }
         return list;
     }
 
-    /// <summary> The gear slot whose whole name the search is ("wrist slot", "Armbandplatz"), in English or translated; else null. </summary>
-    private static Socket? SlotTyped(string[] words)
+    /// <summary>
+    /// The slot bits whose whole name the search is ("wrist slot", "Platz: Handgelenk", "left ring slot"; "ring slot" is
+    /// both ring slots), in English or translated; else null.
+    /// </summary>
+    private static int? SlotTyped(string[] words)
     {
         var typed = string.Concat(words);
-        for (var s = Socket.Head; s <= Socket.OffHand; ++s)
-        {
-            var english = s switch { Socket.MainHand => "Main hand slot", Socket.OffHand => "Off hand slot", _ => KindNames.SlotLabelEnglish(s) };
-            if (typed.Length > 0 && (SearchText.Squash(english) == typed || SearchText.Squash(SlotNameOf(s)) == typed))
-                return s;
-        }
-
+        if (typed.Length == 0)
+            return null;
+        foreach (var bit in SlotOrder.Append(AllRings))
+            if (SearchText.Squash(SlotBitEnglish(bit)) == typed || SearchText.Squash(SlotBitName(bit)) == typed)
+                return MaskOf(bit);
         return null;
     }
 
-    private bool SlotHit(LibPart part, Socket slot)
-        => _shelfOf.TryGetValue(part.Key, out var shelf) && shelf != Pieces.Hidden && SlotsOfThing(part).Contains(slot);
+    private bool SlotHit(LibPart part, int mask)
+        => _shelfOf.TryGetValue(part.Key, out var shelf) && shelf != Pieces.Hidden && (SlotMask(part) & mask) != 0;
 
     private readonly Dictionary<string, (int Stamp, Socket? Slot)> _usualSlots = new();
 
@@ -2790,10 +2840,18 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             return;
         }
 
-        var kept = Copy(OptionsNow(part.Mod));
-        kept[group] = on.ToList();
+        // only the group changed is written (Penumbra keeps the others as they are, also those of a change still
+        // waiting); a mod with nothing saved yet gets the whole set, as it shows now, so its other groups stay too
+        var write = _wardrobe.OptionsSaved(part.Mod)
+            ? new Dictionary<string, List<string>> { [group] = on.ToList() }
+            : Copy(OptionsNow(part.Mod));
+        write[group] = on.ToList();
         var step = Guid.NewGuid();
-        _wardrobe.SetOptions(step, Loc.F("Options of {0}", NameOf(part)), part, kept);
+        _wardrobe.SetOptions(step, Loc.F("Options of {0}", NameOf(part)), part, write);
+        // shown at once (the strip, the looks, the next change built on it) until the wardrobe has written it
+        if (!_pendingOptions.TryGetValue(part.Mod, out var pending))
+            _pendingOptions[part.Mod] = pending = new Dictionary<string, (List<string> On, Guid Step)>();
+        pending[group] = (on.ToList(), step);
         PushUndo(new UndoEntry { Step = step, What = NameOf(part), OutfitStep = true });
         _steps++;
         Changed();
@@ -2881,7 +2939,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         var options = t.Options ?? (IReadOnlyDictionary<string, List<string>>?)HandOver(t.Key.Mod);
         if (!_byKey.TryGetValue(t.Key, out var part) || NumberPicks(part) is not { Count: > 0 } picks)
             return options;
-        var result = Copy(options ?? _wardrobe.CurrentOptions(t.Key.Mod));
+        var result = Copy(options ?? CurrentOptions(t.Key.Mod));
         foreach (var (group, on) in picks)
             result[group] = on;
         return result;
@@ -3009,7 +3067,36 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     {
         if (_tries.FirstOrDefault(t => !t.Nothing && t.Options is not null && t.Key.Mod.Equals(mod, StringComparison.OrdinalIgnoreCase)) is { Options: { } tried })
             return tried;
-        return HandOver(mod) ?? _wardrobe.CurrentOptions(mod);
+        return HandOver(mod) ?? CurrentOptions(mod);
+    }
+
+    /// <summary>
+    /// Option choices written for a kept mod that the wardrobe has not run yet (mod → group → choice and its step). Its
+    /// settings are read every few seconds and a write waits for the last redraw, so until the step has run they are the
+    /// newest known state: the strip shows them, and a second change is built on them, not on the old settings.
+    /// </summary>
+    private readonly Dictionary<string, Dictionary<string, (List<string> On, Guid Step)>> _pendingOptions = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary> The mod's options as Penumbra has them for the player, with the choices still being written over them. </summary>
+    private IReadOnlyDictionary<string, List<string>> CurrentOptions(string mod)
+    {
+        var saved = _wardrobe.CurrentOptions(mod);
+        if (_pendingOptions.Count == 0 || !_pendingOptions.TryGetValue(mod, out var pending))
+            return saved;
+
+        // a step that has run (or failed, or was forgotten) is in the settings as read now
+        foreach (var group in pending.Where(kv => _wardrobe.Step(kv.Value.Step) != StepState.Pending).Select(kv => kv.Key).ToList())
+            pending.Remove(group);
+        if (pending.Count == 0)
+        {
+            _pendingOptions.Remove(mod);
+            return saved;
+        }
+
+        var result = Copy(saved);
+        foreach (var (group, (on, _)) in pending)
+            result[group] = on.ToList();
+        return result;
     }
 
     /// <summary> The closet's pick with the hand choices over it, when the mod has nothing saved and hand choices exist; else null. </summary>
@@ -3018,7 +3105,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         var hand = HandChoices(mod);
         if (hand.Count == 0 || _wardrobe.OptionsSaved(mod))
             return null;
-        var options = Copy(_wardrobe.CurrentOptions(mod));
+        var options = Copy(CurrentOptions(mod));
         foreach (var (group, on) in hand)
             options[group] = on.ToList();
         return options;
@@ -3074,7 +3161,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         // a hair, face, tail or ear part kept with options for another number than the one it shows with: it is on, and
         // stays on, but nothing of it shows; the status line says so instead of "Kept"
         var unseen = requests.Where(r => !r.Nothing && _byKey.TryGetValue(r.Key, out var kp)
-            && !ShowsWith(kp, r.Options ?? _wardrobe.CurrentOptions(r.Key.Mod))).Select(r => NameOf(r.Key)).FirstOrDefault();
+            && !ShowsWith(kp, r.Options ?? CurrentOptions(r.Key.Mod))).Select(r => NameOf(r.Key)).FirstOrDefault();
         foreach (var t in _tries.Where(t => !t.Nothing))
             Usage.Kept(UseOf(t.Key), now);
         _orderStamp++;
@@ -3291,7 +3378,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
                     var shelf = NaturalShelf(part);
                     if (layered && !shelves.Add(shelf))
                         continue;
-                    list.Add(new WornPart(part.Key, shelf, Copy(_wardrobe.CurrentOptions(mod)), _wardrobe.VersionShowing(part.Key)));
+                    list.Add(new WornPart(part.Key, shelf, Copy(CurrentOptions(mod)), _wardrobe.VersionShowing(part.Key)));
                     found = true;
                     if (!layered)
                         break;
@@ -3301,7 +3388,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             if ((layered || !found) && socket == Socket.BodyBase)
                 foreach (var key in _notWorn.Keys.Where(k => k.Socket == Socket.BodyBase).OrderBy(k => k.Mod, StringComparer.OrdinalIgnoreCase))
                     if (list.All(w => w.Key != key) && _wardrobe.IsOn(key) && PartOf(key) is { FitsMe: true } body && shelves.Add(NaturalShelf(body)))
-                        list.Add(new WornPart(body.Key, NaturalShelf(body), Copy(_wardrobe.CurrentOptions(body.Mod.Directory)), -1));
+                        list.Add(new WornPart(body.Key, NaturalShelf(body), Copy(CurrentOptions(body.Mod.Directory)), -1));
         }
 
         return list;
@@ -3347,7 +3434,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             Dictionary<string, List<string>>? options = null;
             if (p.Options is { Count: > 0 } named)
             {
-                options = Copy(_wardrobe.CurrentOptions(p.Key.Mod));
+                options = Copy(CurrentOptions(p.Key.Mod));
                 foreach (var (group, on) in named)
                     options[group] = on.ToList();
             }
@@ -3447,6 +3534,10 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             EndColourTry(false);
             _lookTry = null;
             _tries.Clear();
+            // a choice still being written goes back with its step: the settings say what is on once it has run
+            foreach (var pending in _pendingOptions.Values)
+                foreach (var group in pending.Where(kv => kv.Value.Step == step).Select(kv => kv.Key).ToList())
+                    pending.Remove(group);
             _wardrobe.Undo(step);
             // a look's Keep took its colours along: they go back with the pieces
             Quietly(entry.Restore);

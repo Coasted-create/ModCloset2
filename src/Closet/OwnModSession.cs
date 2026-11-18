@@ -401,7 +401,7 @@ public sealed partial class ClosetSession
     private Dictionary<string, List<string>> ChosenFor(IReadOnlyList<LibPart> thing)
     {
         var tried = _tries.FirstOrDefault(t => !t.Nothing && t.Options is not null && thing.Any(p => p.Key == t.Key));
-        return Copy(tried?.Options ?? _wardrobe.CurrentOptions(thing[0].Mod.Directory));
+        return Copy(tried?.Options ?? CurrentOptions(thing[0].Mod.Directory));
     }
 
     private static bool SameOptions(Dictionary<string, List<string>> a, Dictionary<string, List<string>> b)

@@ -27,8 +27,14 @@ public sealed class SvgCanvas : ICanvas
     private bool          _inOverlay;
 
     public SvgCanvas(float width, float height, float u)
+        : this(new Rect(0, 0, width, height), u)
     {
-        Bounds = new Rect(0, 0, width, height);
+    }
+
+    /// <summary> A canvas whose area starts elsewhere than 0,0 (a second window beside the first, in the same coordinates). </summary>
+    public SvgCanvas(Rect bounds, float u)
+    {
+        Bounds = bounds;
         U      = u;
         _out   = _base;
         _clips = _baseClips;
@@ -37,6 +43,9 @@ public sealed class SvgCanvas : ICanvas
     public float U { get; }
     public Rect Bounds { get; }
     public InputState Input { get; set; } = new();
+
+    /// <summary> Starts every id in the picture (clips, gradients), so two canvases can share one SVG file. </summary>
+    public string IdPrefix { get; init; } = string.Empty;
 
     /// <summary> Pictures that should act as "still loading" (the placeholder is drawn). </summary>
     public HashSet<string> Loading { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -83,10 +92,11 @@ public sealed class SvgCanvas : ICanvas
     public string Document(Colr background)
     {
         var sb = new StringBuilder();
-        sb.Append(Inv, $"<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{F(Bounds.W)}\" height=\"{F(Bounds.H)}\" viewBox=\"0 0 {F(Bounds.W)} {F(Bounds.H)}\">\n");
+        sb.Append(Inv, $"<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{F(Bounds.W)}\" height=\"{F(Bounds.H)}\" viewBox=\"{F(Bounds.X)} {F(Bounds.Y)} {F(Bounds.W)} {F(Bounds.H)}\">\n");
         sb.Append("<style>text{font-kerning:none;font-variant-ligatures:none;font-feature-settings:\"calt\" 0,\"kern\" 0;white-space:pre}</style>\n");
         sb.Append("<defs>").Append(_defs).Append("</defs>\n");
-        sb.Append(Inv, $"<rect width=\"{F(Bounds.W)}\" height=\"{F(Bounds.H)}\" fill=\"{background.HexText}\"/>\n");
+        if (background.A > 0)
+            sb.Append(Inv, $"<rect x=\"{F(Bounds.X)}\" y=\"{F(Bounds.Y)}\" width=\"{F(Bounds.W)}\" height=\"{F(Bounds.H)}\" fill=\"{background.HexText}\"/>\n");
         sb.Append(_base);
         sb.Append(_overlay);
         sb.Append("</svg>\n");
@@ -140,7 +150,7 @@ public sealed class SvgCanvas : ICanvas
         {
             // one direction only: a plain linear gradient
             DrawCalls++;
-            var id       = $"g{_ids++}";
+            var id       = $"{IdPrefix}g{_ids++}";
             var vertical = tl == tr;
             var (a, z)   = vertical ? (tl, bl) : (tl, tr);
             _defs.Append(Inv, $"<linearGradient id=\"{id}\" x1=\"0\" y1=\"0\" x2=\"{(vertical ? 0 : 1)}\" y2=\"{(vertical ? 1 : 0)}\">");
@@ -195,7 +205,7 @@ public sealed class SvgCanvas : ICanvas
             return false;
         DrawCalls++;
         Pictures.Add((path, r));
-        var id = $"p{_ids++}";
+        var id = $"{IdPrefix}p{_ids++}";
         _defs.Append(Inv, $"<clipPath id=\"{id}\"><path d=\"{RoundRectPath(r, radius, corners)}\"/></clipPath>");
         var href = new Uri(Path.GetFullPath(path)).AbsoluteUri;
         var align   = Core.Pictures.IsPhoto(path) ? "xMidYMid" : "xMidYMin";
@@ -288,7 +298,7 @@ public sealed class SvgCanvas : ICanvas
         var current = _clips.Count > 0 ? _clips.Peek() : Bounds.Expand(4000);
         var clip    = current.Intersect(r);
         _clips.Push(clip);
-        var id = $"c{_ids++}";
+        var id = $"{IdPrefix}c{_ids++}";
         _defs.Append(Inv, $"<clipPath id=\"{id}\"><rect x=\"{F(clip.X)}\" y=\"{F(clip.Y)}\" width=\"{F(clip.W)}\" height=\"{F(clip.H)}\"/></clipPath>");
         _out.Append(Inv, $"<g clip-path=\"url(#{id})\">\n");
         _groups.Push(1);

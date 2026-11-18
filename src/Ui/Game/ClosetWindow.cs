@@ -135,6 +135,84 @@ public sealed partial class ClosetWindow : Window, IDisposable
             ImGui.PopStyleVar(_styleVars);
         _styleColors = 0;
         _styleVars   = 0;
+
+        // the options panel: a window of its own beside the closet, drawn after it (only in a frame the closet drew)
+        var drew = _drewFace;
+        _drewFace = false;
+        try
+        {
+            if (drew && _face.PanelShown)
+                DrawPanel();
+            else
+                _panelHovered = false;
+        }
+        catch (Exception e)
+        {
+            if (_logged.Add("panel" + e.GetType().Name + e.Message))
+                _log.Error(e, "Mod Closet 2: the options panel could not be drawn");
+        }
+    }
+
+    private bool _drewFace;
+    private bool _panelHovered;
+    private Rect _closetRect;
+
+    /// <summary>
+    /// The panel window: no title bar, not movable or resizable by ImGui; it sits against the closet's right edge (left
+    /// when the screen has no room there), as tall as the closet, and moves with it, until the user drags its head or
+    /// corner: then it stays where it was put (the face keeps and remembers that place). Its whole look is the face's.
+    /// </summary>
+    private void DrawPanel()
+    {
+        var viewport = ImGui.GetMainViewport();
+        var screen   = new Rect(viewport.Pos.X, viewport.Pos.Y, viewport.Size.X, viewport.Size.Y);
+        // beside the closet, or where the user moved it (kept on the screen)
+        var place    = _face.PanelRect(_closetRect, screen);
+        ImGui.SetNextWindowPos(new Vector2(place.X, place.Y), ImGuiCond.Always);
+        ImGui.SetNextWindowSize(new Vector2(place.W, place.H), ImGuiCond.Always);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ScrollbarSize, 0f);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, Colr.Transparent.Abgr);
+        const ImGuiWindowFlags flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoScrollbar
+            | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing
+            | ImGuiWindowFlags.NoDocking;
+        try
+        {
+            if (ImGui.Begin("###ModCloset2Panel", flags))
+            {
+                var min   = ImGui.GetCursorScreenPos();
+                var avail = ImGui.GetContentRegionAvail();
+                if (avail.X >= 1 && avail.Y >= 1)
+                {
+                    // one item over the whole panel, as in the closet: a drag inside never reaches the game
+                    ImGui.InvisibleButton("##panel", avail, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight);
+                    ImGui.SetItemAllowOverlap();
+                    var held    = ImGui.IsItemActive();
+                    var content = new Rect(min.X, min.Y, avail.X, avail.Y);
+                    var mouse   = ImGui.GetMousePos();
+                    _panelHovered = ImGui.IsWindowHovered(ImGuiHoveredFlags.AllowWhenBlockedByActiveItem) && content.Contains(mouse);
+                    ImGui.SetCursorScreenPos(min);
+                    _canvas.Begin(content, _panelHovered || held, _panelHovered && !_chat.Typing);
+                    try
+                    {
+                        _face.DrawPanel(_canvas, _session);
+                    }
+                    finally
+                    {
+                        // the pictures' frame ended with the closet's
+                        _canvas.End(endOfFrame: false);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            ImGui.End();
+            ImGui.PopStyleColor();
+            ImGui.PopStyleVar(4);
+        }
     }
 
     private void Var(ImGuiStyleVar v, float value)
@@ -241,6 +319,8 @@ public sealed partial class ClosetWindow : Window, IDisposable
             _log.Information(line);
         _keySources.Lines.Clear();
         _face.OnYouAvailable = OnYouRequested is not null;
+        _drewFace   = true;
+        _closetRect = window;
         _face.BottomRounding = Math.Max(0, ImGui.GetStyle().WindowRounding - 1);
         try
         {
@@ -263,7 +343,7 @@ public sealed partial class ClosetWindow : Window, IDisposable
             _face.RequestDone();
         }
 
-        _keys.Drawn(mouseOver, typing, _face.Wants);
+        _keys.Drawn(mouseOver || _panelHovered, typing, _face.Wants);
 
         if (_face.WantsOnYou)
         {

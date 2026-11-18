@@ -82,11 +82,9 @@ public sealed partial class WindowFace
         => new[] { ("alt", Loc.T("Alt")), ("ctrl", Loc.T("Ctrl")), ("shift", Loc.T("Shift")), ("none", Loc.T("No key")) };
 
     private const string PopCard     = "card";
-    private const string PopSlots    = "slots";
     private const string PopOwnMod   = "own-mod";
     private const string PopSaveLook = "save-look";
     private const string PopOption   = "option";
-    private const string PopMore     = "options-more";
     private const string PopSettings = "settings";
     private const string PopWhy      = "why";
     private const string PopNewShelf = "new-shelf";
@@ -94,7 +92,10 @@ public sealed partial class WindowFace
     private const string PopKinds    = "kinds";
     private const string PopSlotChips = "slot-chips";
 
-    private readonly Gui _ui = new();
+    // the closet's own controls, and the options panel's (a window of its own beside it); _ui is the one drawing now
+    private readonly Gui _mainUi = new();
+    private readonly Gui _panelUi = new();
+    private Gui _ui;
     private IClosetSession _s = null!;
     private ICanvas _c = null!;
     private float _u = 1;
@@ -112,8 +113,11 @@ public sealed partial class WindowFace
     private bool _wasSettled = true;
     private bool _first = true;
 
+    public WindowFace()
+        => _ui = _mainUi;
+
     public Gui Gui
-        => _ui;
+        => _mainUi;
 
     public bool IsSlim { get; private set; }
 
@@ -138,7 +142,7 @@ public sealed partial class WindowFace
         var wants = GameKeys.None;
         if (t.Active)
             wants |= GameKeys.Enter | GameKeys.Escape;
-        if (_ui.PopupId.Length > 0 || _ui.Drag is not null || _slimSearch)
+        if (_mainUi.PopupId.Length > 0 || _panelUi.PopupId.Length > 0 || _mainUi.Drag is not null || _slimSearch)
             wants |= GameKeys.Escape;
         if ((_view == View.Shelf && _s.Selected != Pieces.ToSort || Searching) && _s.Scan.Ready && _s.Cards.Count > 0)
             wants |= GameKeys.Arrows;
@@ -165,9 +169,10 @@ public sealed partial class WindowFace
     /// <summary> Draws one frame into the canvas's bounds. Never throws for a session that misbehaves: draws what it can. </summary>
     public void Draw(ICanvas canvas, IClosetSession session, WindowPlace place)
     {
-        _c = canvas;
-        _s = session;
-        _u = canvas.U;
+        _c  = canvas;
+        _s  = session;
+        _u  = canvas.U;
+        _ui = _mainUi;
         _ui.Begin(canvas);
         Stats.CardsDrawn    = 0;
         Stats.RailRowsDrawn = 0;
@@ -208,13 +213,18 @@ public sealed partial class WindowFace
             DrawWide(b);
 
         DrawPopups();
+        // one popup at a time across the closet and its panel (they share the colour picker's state)
+        if (_mainUi.PopupId.Length > 0 && _mainUi.PopupOpenedFrame == _mainUi.Frame)
+            _panelUi.ClosePopup();
         DrawDragGhost();
         DrawLockHint();
         Keys();
 
         // every frame: is the mouse over the cards (or the To sort list)? While it is, nothing jumps shelves there
         _s.GridHovered(Stats.GridHovered);
-        PointingDone();
+        // with the panel shown, its bar can be pointed at too: the panel ends the pointing after it is drawn
+        if (!PanelShown)
+            PointingDone();
         FinishLostDrag();
         ForgetPictureSlots();
         Wants = KeysWanted();
@@ -627,7 +637,11 @@ public sealed partial class WindowFace
         _navShown = true;
         var card = cards[_nav];
         if (card.State == CardState.None)
+        {
             _s.Try(card.Key);
+            _shownWant = card.Key;
+        }
+
         ScrollToCard(_nav);
     }
 }

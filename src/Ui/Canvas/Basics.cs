@@ -157,6 +157,12 @@ public enum CursorShape : byte
 {
     Arrow,
     Hand,
+
+    /// <summary> Over something that moves a window (the options panel's head). </summary>
+    Move,
+
+    /// <summary> Over a corner that sizes a window. </summary>
+    ResizeCorner,
 }
 
 /// <summary> What the mouse and keyboard did this frame, as the canvas saw it. </summary>

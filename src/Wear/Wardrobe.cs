@@ -225,8 +225,16 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
     {
         _steps[step] = StepState.Pending;
         var copy = options.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
+        _optionWrites.Add(step);
         Enqueue(false, () => SetOptionsNow(step, description, part, copy), step);
     }
+
+    /// <summary> The steps that are option writes (several waiting in a row are written one per frame, with one redraw after the last). </summary>
+    private readonly HashSet<Guid> _optionWrites = new();
+
+    /// <summary> The next thing waiting is another option write: this one's redraw is left to it. </summary>
+    private bool OptionWriteNext
+        => _queue.Count > 0 && _queue[0].Step is { } next && _optionWrites.Contains(next);
 
     public void SetVersion(Guid step, string description, PartKey part, int version)
     {
@@ -1105,7 +1113,11 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         RefreshSettings(force: true);
         _journal.Commit(entry, Journal.Snapshot(Settings, dirs), null);
         _steps[step] = StepState.Done;
-        RedrawPlayer();
+        _optionWrites.Remove(step);
+        // toggles clicked in a row while the last redraw settled are written one after another, and the character is
+        // redrawn once, after the last (each redraw makes the next change wait for it)
+        if (WearRules.RedrawAfterOptions(OptionWriteNext))
+            RedrawPlayer();
         if (bad > 0)
             Fail(Loc.T("Penumbra could not change that option."));
     }

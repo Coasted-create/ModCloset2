@@ -4,7 +4,7 @@ Your [Penumbra](https://github.com/xivdev/Penumbra) mods as a closet. Mod Closet
 FINAL FANTASY XIV that sorts your mods onto shelves by what they are on you (tops, shoes, earrings, tails, nails…),
 lets you try one on with a click, and keeps it only when you say so.
 
-> **Status: test build (0.7.5).** It has been used on one large mod library. Expect rough edges, and please report them.
+> **Status: test build (0.7.7).** It has been used on one large mod library. Expect rough edges, and please report them.
 
 ## What it does
 
@@ -15,12 +15,14 @@ lets you try one on with a click, and keeps it only when you say so.
   takes the last step back. Nothing is kept until you say so.
 - **Moving is locked.** The lock beside Undo stops a mod from being dragged onto a wrong shelf by accident; click it
   to drag mods freely. Move to… in a card's menu always works.
-- **Mod options before Keep.** A mod's options show at the top while you try it, so you can pick the right face,
-  tail or size before you keep it.
+- **Options and colours beside the closet.** Click a mod and a panel opens next to the closet with its colours and
+  every option laid out, so you can pick the right face, tail or size before you keep it. Drag it away to place it
+  anywhere.
 - **Bodies, skin and makeup apart.** Body mods, skin textures, face sculpts and makeup each have their own shelf; a
   skin goes over the body you wear and makeup over the sculpt.
 - **Which slot a mod uses.** Every card names the game slot it is worn through, marked when it is unusual (a jacket
-  in the wrist slot), and a slot filter shows only the mods of one slot.
+  in the wrist slot), and a slot filter shows only the mods of one slot
+  (the right and the left ring slot apart).
 - **Options at a glance.** A card whose mod has options to set (sleeves, length, a face number…) says so, and
   shows which ones when you point at it.
 - **Rings for either hand.** Rings sit on a right and a left shelf. A ring made for one hand can be copied into a mod

@@ -106,8 +106,12 @@ public sealed unsafe class ImGuiCanvas : ICanvas, IDisposable
             Input.Keys.Add(key);
     }
 
-    /// <summary> Ends the frame: closes what is open, merges the overlay on top, sets the mouse cursor, lets go of old pictures. </summary>
-    public void End()
+    /// <summary>
+    /// Ends the frame: closes what is open, merges the overlay on top, sets the mouse cursor, lets go of old pictures.
+    /// A second window drawn with the same canvas in the same frame (the options panel) passes false: the pictures'
+    /// frame ends once.
+    /// </summary>
+    public void End(bool endOfFrame = true)
     {
         if (_overlay)
             EndOverlay();
@@ -117,9 +121,15 @@ public sealed unsafe class ImGuiCanvas : ICanvas, IDisposable
             PopClip();
         _draw.PopClipRect();
         _draw.ChannelsMerge();
-        if (_mouseOwned && _cursor == CursorShape.Hand)
-            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
-        _pictures.EndFrame();
+        if (_mouseOwned && _cursor != CursorShape.Arrow)
+            ImGui.SetMouseCursor(_cursor switch
+            {
+                CursorShape.Move         => ImGuiMouseCursor.ResizeAll,
+                CursorShape.ResizeCorner => ImGuiMouseCursor.ResizeNwse,
+                _                        => ImGuiMouseCursor.Hand,
+            });
+        if (endOfFrame)
+            _pictures.EndFrame();
     }
 
     // ---- shapes ----

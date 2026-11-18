@@ -25,12 +25,6 @@ public sealed partial class WindowFace
                 case PopOption when _ui.PopupContext is ValueTuple<WearingInfo, OptionChip> ctx:
                     OptionMenu(ctx.Item1, ctx.Item2);
                     break;
-                case PopMore when _ui.PopupContext is ValueTuple<WearingInfo, List<StripChip>> more:
-                    MoreMenu(more.Item1, more.Item2);
-                    break;
-                case PopSlots when _ui.PopupContext is PartKey slotsOf:
-                    SlotsMenu(slotsOf);
-                    break;
                 case PopOwnMod when _ui.PopupContext is PartKey ownOf:
                     OwnModPanel(ownOf);
                     break;
@@ -179,7 +173,7 @@ public sealed partial class WindowFace
             _s.Move(item.Key, picked.Id[5..]);
     }
 
-    // ---- options on the "Wearing" strip ----
+    // ---- options (the card menu's Options ▸ group; the panel lays them out openly) ----
 
     /// <summary>
     /// A group's choices as menu rows; a group the closet fits to the body starts with "Automatic" (ticked while nobody
@@ -194,33 +188,36 @@ public sealed partial class WindowFace
         return items;
     }
 
-    private void SetChoice(WearingInfo w, OptionChip option, int index)
+    /// <summary>
+    /// The group as the session has it now (its newest <see cref="OptionChip.On"/>), else the one given. Ticks, counts
+    /// and every click are built from this, never from a list kept since a menu or the panel opened: a written choice
+    /// shows in the session's lists the frame after, so two quick clicks each start from the one before.
+    /// </summary>
+    private OptionChip CurrentOption(PartKey key, OptionChip option)
+        => _s.WearingAll.FirstOrDefault(x => x.Key == key)?.Options.FirstOrDefault(o => o.Group == option.Group) ?? option;
+
+    private void SetChoice(PartKey key, OptionChip option, int index)
     {
+        option = CurrentOption(key, option);
         if (index < 0 || index >= option.Choices.Count)
             return;
         var choice = option.Choices[index];
         IReadOnlyList<string> on = option.Multi
             ? option.On.Contains(choice) ? option.On.Where(c => c != choice).ToList() : option.On.Append(choice).ToList()
             : new[] { choice };
-        _s.SetOption(w.Key, option.Group, on);
-
-        // a multi-choice menu stays open: show the new state at once (the session's lists come back on its next version)
-        if (option.Multi && _ui.PopupContext is ValueTuple<WearingInfo, OptionChip>)
-            _ui.OpenPopup(PopOption, _ui.PopupAnchor, (w, new OptionChip { Group = option.Group, Choices = option.Choices, On = on, Multi = true, Fits = option.Fits }));
+        _s.SetOption(key, option.Group, on);
     }
 
     private void OptionMenu(WearingInfo w, OptionChip option)
     {
-        var current = WornWithKey(w.Key)?.Options.FirstOrDefault(o => o.Group == option.Group);
-        if (current is not null && !option.Multi)
-            option = current;
+        option = CurrentOption(w.Key, option);
         var items = new List<MenuItem> { MenuItem.Header(option.Group) };
         items.AddRange(ChoiceItems(option, "choice:"));
         var picked = Menu.Draw(_ui, PopOption, _ui.PopupAnchor, items, 160);
         if (picked?.Id == "choice:auto")
             _s.SetOption(w.Key, option.Group, null);
         else if (picked is not null && int.TryParse(picked.Id.AsSpan(7), out var i))
-            SetChoice(w, option, i);
+            SetChoice(w.Key, option, i);
     }
 
     // ---- the slots a thing can be worn through ----
@@ -241,56 +238,6 @@ public sealed partial class WindowFace
             return false;
         _s.WearOn(key, (Socket)slot);
         return true;
-    }
-
-    /// <summary> The strip's slot chip: the same list as the card menu's "Wear on". </summary>
-    private void SlotsMenu(PartKey key)
-    {
-        var slots = _s.SlotsOf(key);
-        if (slots.Count == 0)
-        {
-            _ui.ClosePopup();
-            return;
-        }
-
-        var items = new List<MenuItem> { MenuItem.Header(Loc.T("Wear on")) };
-        items.AddRange(SlotItems(slots));
-        WearOnPicked(key, Menu.Draw(_ui, PopSlots, _ui.PopupAnchor, items, 180));
-    }
-
-    private void MoreMenu(WearingInfo w, List<StripChip> chips)
-    {
-        var items = new List<MenuItem>();
-        for (var i = 0; i < chips.Count; ++i)
-        {
-            var chip = chips[i];
-            items.Add(chip.Option is { } o
-                ? new MenuItem("group:" + i, $"{chip.Label}: {chip.Value}") { Sub = ChoiceItems(o, $"c{i}:") }
-                : chip.Slot
-                    ? new MenuItem("slots", Loc.F("{0}: {1}", Loc.T("Wear on"), chip.Value)) { Sub = SlotItems(_s.SlotsOf(w.Key)) }
-                    : new MenuItem("version", Loc.F("{0}: {1}", chip.Label, chip.Value)) { Icon = null, KeepOpen = true });
-        }
-
-        var picked = Menu.Draw(_ui, PopMore, _ui.PopupAnchor, items, 200);
-        if (picked is null || WearOnPicked(w.Key, picked))
-            return;
-        if (picked.Id == "version")
-        {
-            _s.SetVersion(w.Key, (w.Version + 1) % Math.Max(1, w.Versions));
-            return;
-        }
-
-        var cut = picked.Id.IndexOf(':');
-        if (picked.Id.StartsWith('c') && cut > 1 && picked.Id.EndsWith(":auto", StringComparison.Ordinal) && int.TryParse(picked.Id.AsSpan(1, cut - 1), out var ai)
-         && ai < chips.Count && chips[ai].Option is { } autoOption)
-        {
-            _s.SetOption(w.Key, autoOption.Group, null);
-            return;
-        }
-
-        if (picked.Id.StartsWith('c') && cut > 1 && int.TryParse(picked.Id.AsSpan(1, cut - 1), out var gi) && int.TryParse(picked.Id.AsSpan(cut + 1), out var ci)
-         && gi < chips.Count && chips[gi].Option is { } option)
-            SetChoice(w, option, ci);
     }
 
     private void KindsMenu()

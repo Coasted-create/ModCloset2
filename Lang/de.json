@@ -603,5 +603,13 @@
   "Options: {0}": "Optionen: {0}",
   "Moving mods between shelves is locked. Click to unlock.": "Das Verschieben von Mods zwischen Fächern ist gesperrt. Zum Entsperren klicken.",
   "Mods can be dragged onto another shelf. Click to lock.": "Mods lassen sich in ein anderes Fach ziehen. Zum Sperren klicken.",
-  "Unlock to move mods to another shelf": "Entsperren, um Mods in ein anderes Fach zu ziehen"
+  "Unlock to move mods to another shelf": "Entsperren, um Mods in ein anderes Fach zu ziehen",
+  "Options & colours": "Optionen & Farben",
+  "Close the options and colours": "Optionen und Farben schließen",
+  "Show the options and colours beside the closet": "Optionen und Farben neben dem Schrank zeigen",
+  "Version {0}": "Version {0}",
+  "This mod has no options to choose.": "Diese Mod hat keine Optionen zur Auswahl.",
+  "Right ring slot": "Platz: Ring rechts",
+  "Left ring slot": "Platz: Ring links",
+  "Put it back beside the closet": "Wieder neben den Schrank setzen"
 }

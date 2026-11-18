@@ -95,23 +95,23 @@ public sealed partial class WindowFace
             right0 = off.X - P(8);
         }
 
+        // the options and the colour bar live in the panel beside the closet; under the name, one button opens it
         var x      = pic.Right + P(12);
         var right  = right0;
-        var chips  = WearingChips(wearing);
-        var live   = ShownColours(wearing, shownIndex);
-        var hasBar = live is not null;
-        var second = hasBar ? P(12) : chips.Count > 0 ? P(24) : 0;
+        var more   = PanelHasMore(wearing, shownIndex);
+        var second = more ? P(26) : 0;
         var lh     = _c.LineHeight(BodyBoldSlim);
         var top    = r.Center.Y - (lh + (second > 0 ? P(6) + second : 0)) / 2;
         var label  = WearingLabel(wearing, shownCount, true);
         var lw     = Math.Min(_c.Measure(label, Theme.Label).X, (right - x) / 2);
         Painter.TextIn(_c, new Rect(x, top + P(1), lw, lh), label, Theme.Label, Theme.Muted);
-        Painter.TextIn(_c, new Rect(x + lw + P(8), top, right - x - lw - P(8), lh), wearing.Name, BodyBoldSlim, Theme.Text);
-        var y = top + lh + P(6);
-        if (hasBar)
-            LiveBar(live!, new Rect(x, y, right - x, P(12)), P(6), Theme.Rail, wholeButton: true);
-        else if (chips.Count > 0)
-            ChipRow(new Rect(x, y, right - x, P(24)), wearing, chips);
+        var nameBox = new Rect(x + lw + P(8), top, right - x - lw - P(8), lh);
+        var fitted  = Painter.Fit(_c, wearing.Name, nameBox.W, BodyBoldSlim);
+        Painter.TextIn(_c, nameBox, fitted, BodyBoldSlim, Theme.Text);
+        if (more)
+            PanelButton(new Rect(x, top + lh + P(6), Math.Min(PanelButtonWidth(true), right - x), second));
+        // the picture and the name line open the panel too (not the button's row)
+        WearingOpens(new Rect(pic.X, r.Y, right - pic.X, (more ? top + lh + P(3) : r.Bottom) - r.Y), wearing, fitted);
     }
 
     private static readonly TextStyle BodyBoldSlim = Theme.BodyBold;

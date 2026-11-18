@@ -57,12 +57,16 @@ public sealed partial class WindowFace
 
     /// <summary> The host's window is closing: a drag in the picker that is still open is finished now. </summary>
     public void WindowClosing()
-        => FinishColourDrag();
+    {
+        FinishColourDrag();
+        ClosePanel();
+    }
 
     /// <summary> Once per frame, after drawing: a drag whose picker is no longer open is finished. </summary>
     private void FinishLostDrag()
     {
-        if (_pickDrag != 0 && !(_ui.IsOpen(PopPicker) && ReferenceEquals(_ui.PopupContext, _dragTarget)))
+        if (_pickDrag != 0 && !(_mainUi.IsOpen(PopPicker) && ReferenceEquals(_mainUi.PopupContext, _dragTarget))
+         && !(_panelUi.IsOpen(PopPicker) && ReferenceEquals(_panelUi.PopupContext, _dragTarget)))
             FinishColourDrag();
     }
 
