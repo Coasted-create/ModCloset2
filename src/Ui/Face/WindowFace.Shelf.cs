@@ -364,7 +364,7 @@ public sealed partial class WindowFace
         {
             var col = new Rect(x, r.Center.Y - (labelH + P(7) + P(16)) / 2, barW, labelH + P(7) + P(16));
             Painter.TextIn(_c, new Rect(col.X, col.Y, col.W, labelH), Loc.T("Colours"), Theme.Label, Theme.Muted);
-            LiveBar(live!, new Rect(col.X, col.Y + labelH + P(7), col.W, P(16)), P(8), Theme.Rail);
+            LiveBar(live!, new Rect(col.X, col.Y + labelH + P(7), col.W, P(16)), P(8), Theme.Rail, wholeButton: true);
             x += barW + P(18);
         }
 

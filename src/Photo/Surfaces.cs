@@ -44,6 +44,21 @@ public static class Surfaces
     /// <summary> Surfaces the mod does not ship (the game's own materials): a neutral grey, a little cooler than the mannequin. </summary>
     public static readonly Vector3 Unknown = Studio.Srgb(0x8E, 0x8C, 0x94);
 
+    /// <summary>
+    /// Hair, tails, brows and lashes: their colour comes from the character, so one fixed neutral hair colour (a soft
+    /// dark brown that the studio light shows as a mid brown) and a second fixed tone where the hair's highlights mask says (the normal map's blue), as the game
+    /// blends its hair and highlight colours.
+    /// </summary>
+    public static readonly Vector3 HairColour = Studio.Srgb(0x3F, 0x2F, 0x29);
+    public static readonly Vector3 HairHighlight = Studio.Srgb(0x8C, 0x74, 0x62);
+
+    /// <summary> Skin that is the piece (a face, makeup, a body): the texture's colour times one fixed neutral tone. </summary>
+    public static readonly Vector3 SkinTone = new(1.0f, 0.97f, 0.95f);
+
+    /// <summary> An eye's colour where its mask says, a muted grey-blue; face paint in a fixed deep rose (the player picks it in the game). </summary>
+    public static readonly Vector3 EyeColour = Studio.Srgb(0x6E, 0x86, 0x94);
+    public static readonly Vector3 DecalColour = Studio.Srgb(0x9A, 0x3E, 0x52);
+
     /// <summary> How strongly the normal map bends the light (a small picture does not need every thread). </summary>
     public const float BumpStrength = 0.8f;
 
@@ -52,6 +67,8 @@ public static class Surfaces
         var m = p.Item.Mesh;
         var uv = m.Uvs[m.Indices[t]] * w0 + m.Uvs[m.Indices[t + 1]] * w1 + m.Uvs[m.Indices[t + 2]] * (1 - w0 - w1);
         var s = p.Item.Surface;
+        if (s.Kind == SurfaceKind.Hair)
+            return s.Normal is { } hn ? Sample(hn, uv).W : 1; // the hair shader keeps its strands' alpha in the normal map's alpha
         if (s.Normal is { } n)
             return Sample(n, uv).Z;
         if (s.Diffuse is { } d)
@@ -79,6 +96,49 @@ public static class Surfaces
         var nrm = s.Normal is { } nm ? Sample(nm, uv) : new Vector4(0.5f, 0.5f, 1, 1);
 
         // ---- colour
+        if (s.Kind == SurfaceKind.Hair)
+        {
+            look.Base      = Vector3.Lerp(HairColour, HairHighlight, Math.Clamp(nrm.Z, 0, 1));
+            look.Roughness = 0.45f;
+            look.Specular  = new Vector3(0.05f);
+            look.Alpha     = nrm.W;
+            if (s.Mask is { } hm)
+                look.Occlusion = 0.45f + 0.55f * Sample(hm, uv).W; // the mask's alpha darkens the strands inside the hair
+            Bump(ref look, p, a, b, c, w0, w1, w2, normal, flipped, nrm);
+            return look;
+        }
+
+        if (s.Kind == SurfaceKind.Iris)
+        {
+            var colour = s.Diffuse is { } eye ? Linear(Sample(eye, uv)) : EyeColour;
+            var tint   = s.Mask is { } em ? Sample(em, uv).Z : 0;
+            look.Base      = colour * Vector3.Lerp(Vector3.One, EyeColour * 1.6f, tint);
+            look.Roughness = 0.2f;
+            look.Specular  = new Vector3(0.05f);
+            Bump(ref look, p, a, b, c, w0, w1, w2, normal, flipped, nrm);
+            return look;
+        }
+
+        if (s.Kind == SurfaceKind.SkinTextured)
+        {
+            // the skin texture already carries the skin's colour and what is painted on it; the normal map's blue says
+            // where the character's skin colour applies (the neutral tone here)
+            var colour = s.Diffuse is { } skin ? Linear(Sample(skin, uv)) : Mannequin;
+            look.Base      = colour * Vector3.Lerp(Vector3.One, SkinTone, Math.Clamp(nrm.Z, 0, 1));
+            look.Roughness = 0.6f;
+            look.Specular  = new Vector3(0.025f);
+            if (s.IsFace && p.Decal is { } decal)
+            {
+                var uv2 = m.Uvs2[a] * w0 + m.Uvs2[b] * w1 + m.Uvs2[c] * w2;
+                // the paint lies where the face's second coordinates fall inside the texture; outside it there is none
+                if (uv2.X is >= 0 and < 1 && uv2.Y is >= 0 and < 1)
+                    look.Base = Vector3.Lerp(look.Base, DecalColour, Math.Clamp(Sample(decal, uv2).X, 0, 1));
+            }
+
+            Bump(ref look, p, a, b, c, w0, w1, w2, normal, flipped, nrm);
+            return look;
+        }
+
         if (s.Kind == SurfaceKind.Table && s.Rows.Length > 0)
         {
             var row = s.RowFromNormalAlpha ? LegacyRow(s.Rows, nrm.W) : s.Index is { } idx ? IndexRow(s.Rows, idx, uv) : s.Rows[0];
@@ -108,7 +168,15 @@ public static class Surfaces
 
         look.Alpha = s.Normal is not null ? nrm.Z : s.Diffuse is { } d2 ? Sample(d2, uv).W : 1;
 
-        // ---- shape: the normal map bends the normal in the plane the texture coordinates span
+        Bump(ref look, p, a, b, c, w0, w1, w2, normal, flipped, nrm);
+        return look;
+    }
+
+    /// <summary> The normal map bends the normal in the plane the texture coordinates span. </summary>
+    private static void Bump(ref SurfaceLook look, Studio.Prepared p, int a, int b, int c, float w0, float w1, float w2, Vector3 normal, bool flipped, Vector4 nrm)
+    {
+        var s = p.Item.Surface;
+        var m = p.Item.Mesh;
         if (s.Normal is not null && m.HasUvs)
         {
             var t  = p.Pools.Tangents[a] * w0 + p.Pools.Tangents[b] * w1 + p.Pools.Tangents[c] * w2;
@@ -131,8 +199,6 @@ public static class Surfaces
                     look.Normal = Vector3.Normalize(bent);
             }
         }
-
-        return look;
     }
 
     /// <summary>

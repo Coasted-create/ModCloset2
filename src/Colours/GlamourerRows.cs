@@ -128,14 +128,23 @@ public static class GlamourerRows
     /// <summary> How near a row must still be to what was written to count as ours (Glamourer keeps floats; a little slack). </summary>
     public const double OursTolerance = 5e-3;
 
+    /// <summary> A row to take off the character: the entries the closet wrote there (newest first), and whether the user asked for it now. </summary>
+    /// <param name="Force"> The user just asked for this row's area to show its own colour: put back whoever changed it since. </param>
+    public sealed record Release(string Key, IReadOnlyList<JObject> Ours, bool Force = false);
+
+    /// <summary> True when an entry is one the closet wrote (any of <paramref name="ours"/>). </summary>
+    public static bool IsOurs(JToken? entry, IReadOnlyList<JObject> ours)
+        => ours.Any(o => Same(entry, o, OursTolerance));
+
     /// <summary>
-    /// Patches a state's advanced dyes: <paramref name="wanted"/> rows are set; rows of <paramref name="release"/> (ours,
-    /// no longer wanted) are put back to the game's colour, but only where the row still holds the entry that was
-    /// written: a row someone else changed since (a Glamourer design, automation, the user) is left alone. Returns the
-    /// new materials, whether anything changed, and the released keys that were not ours any more (to forget).
+    /// Patches a state's advanced dyes: <paramref name="wanted"/> rows are set; rows of <paramref name="release"/> are put
+    /// back to the game's colour when they still hold an entry the closet wrote (the latest, or an earlier one that
+    /// something brought back, such as a look saved before and put on again), or when the user asked for it (forced). A
+    /// row someone else changed meanwhile (a Glamourer design, automation, the user in Glamourer) is left alone. Returns
+    /// the new materials, whether anything changed, and the released keys that were not ours any more (left alone).
     /// </summary>
     public static (JObject Materials, bool Changed, List<string> NotOurs) Patch(JToken? current, IEnumerable<RowWrite> wanted,
-        IEnumerable<(string Key, JObject Written)> release)
+        IEnumerable<Release> release)
     {
         var materials = Canon(current);
         var changed   = false;
@@ -151,17 +160,17 @@ public static class GlamourerRows
             changed = true;
         }
 
-        foreach (var (key, written) in release)
+        foreach (var r in release)
         {
-            if (set.Contains(key) || materials[key] is null || IsRevert(materials[key]))
+            if (set.Contains(r.Key) || materials[r.Key] is null || IsRevert(materials[r.Key]))
                 continue;
-            if (!Same(materials[key], written, OursTolerance))
+            if (!r.Force && !IsOurs(materials[r.Key], r.Ours))
             {
-                notOurs.Add(key);
+                notOurs.Add(r.Key);
                 continue;
             }
 
-            materials[key] = Revert();
+            materials[r.Key] = Revert();
             changed = true;
         }
 

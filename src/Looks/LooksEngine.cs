@@ -52,6 +52,19 @@ public sealed class LooksEngine : ILooks
     /// <summary> The pinned look the outfit is, or started from. </summary>
     private Guid? _base;
 
+    /// <summary>
+    /// The base was the closet's guess (one look fit better than every other), not the user's word (a Keep of its try, a
+    /// click on its tile, a pin, an update). A guess gives way to a look that fits strictly better; the user's word holds
+    /// while the outfit still fits it, whatever else fits too.
+    /// </summary>
+    private bool _baseGuessed;
+
+    /// <summary>
+    /// Pinned looks the outfit is equally (twins: the same pieces, nothing that tells them apart). The closet does not
+    /// pick between them: "Wearing now" names them all and asks, until the user clicks one.
+    /// </summary>
+    private readonly List<Guid> _maybe = new();
+
     // what was seen of the world last time
     private bool _started;
     private int _outfitSeen = int.MinValue, _stepsSeen, _keptSerial, _librarySeen = int.MinValue, _modsSeen = int.MinValue, _coloursSeen = int.MinValue;
@@ -231,7 +244,9 @@ public sealed class LooksEngine : ILooks
             }
         }
 
-        _base = snap.Base is { } b && _byId.ContainsKey(b) ? b : null;
+        _base        = snap.Base is { } b && _byId.ContainsKey(b) ? b : null;
+        _baseGuessed = false;
+        _maybe.Clear();
         Changed();
     }
 
@@ -289,6 +304,16 @@ public sealed class LooksEngine : ILooks
             way = Math.Clamp(l.Colourway, 0, Math.Max(0, l.Colourways.Count - 1));
         }
 
+        // a click on a look's tile says "this one": a twin that is on already as it is needs no try, and among looks the
+        // closet could not tell apart the one clicked is the one meant (also if its try is put back)
+        if (l.Pinned && (_maybe.Contains(l.Id) || parts.Count == 0 && off.Count == 0 && colours is null))
+        {
+            Choose(l.Id);
+            if (ColourwayOn(l) is >= 0 and var on)
+                l.Colourway = on;
+            Changed();
+        }
+
         if (parts.Count == 0 && off.Count == 0 && colours is null)
             return; // it is on already, exactly
         _outfit.TryLook(new LookTry(l.Id, way, NameOf(l), LookTexts.TryNote(Matching.Count(l, _lens), missing, l.WithBody), parts, off, colours));
@@ -300,7 +325,7 @@ public sealed class LooksEngine : ILooks
         if (Find(look) is not { Pinned: false } l)
             return;
         var name = NameOf(l);
-        if (_looks.FirstOrDefault(p => p.Pinned && Matching.SamePieces(p, l, _lens)) is { } existing)
+        if (Twin(l) is { } existing)
         {
             // the same pieces are a look already: these colours become one of its colourways
             var before = Snapshot(l.Id, existing.Id);
@@ -331,7 +356,7 @@ public sealed class LooksEngine : ILooks
         // the lately entry of this very outfit is pinned with it (it is not listed twice)
         var lately = _looks.Where(l => !l.Pinned && Matching.Same(l, _now, _lens) && SameColours(l, colours)).Select(l => l.Id).ToList();
 
-        if (_looks.FirstOrDefault(p => p.Pinned && Matching.Same(p, _now, _lens)) is { } existing)
+        if ((Worn() ?? TheSame()) is { } existing)
         {
             var known = colours is null || existing.Colourways.Any(c => KeyOf(c.Colours) == KeyOf(colours.Colours));
             if (known && lately.Count == 0)
@@ -339,7 +364,7 @@ public sealed class LooksEngine : ILooks
                 // exactly a look already: nothing to pin
                 if (colours is not null)
                     existing.Colourway = IndexOf(existing, colours);
-                _base = existing.Id;
+                Choose(existing.Id);
                 Changed();
                 return existing.Id;
             }
@@ -349,7 +374,7 @@ public sealed class LooksEngine : ILooks
                 existing.Colourway = AddColourway(existing, colours);
             foreach (var id in lately)
                 RemoveLook(_byId[id]);
-            _base = existing.Id;
+            Choose(existing.Id);
             Step(Loc.F("Pin {0}", NameOf(existing)), before, Snapshot(lately.Append(existing.Id)));
             return existing.Id;
         }
@@ -364,7 +389,7 @@ public sealed class LooksEngine : ILooks
         foreach (var id in lately)
             RemoveLook(_byId[id]);
         AddLook(made);
-        _base = made.Id;
+        Choose(made.Id);
         Step(Loc.F("Pin {0}", NameOf(made)), start, Snapshot(lately.Append(made.Id)));
         return made.Id;
     }
@@ -403,7 +428,7 @@ public sealed class LooksEngine : ILooks
         }
 
         if (l.Pinned)
-            _base = l.Id;
+            Choose(l.Id);
         Step(Loc.F("Update {0}", NameOf(l)), before, Snapshot(l.Id));
     }
 
@@ -607,7 +632,7 @@ public sealed class LooksEngine : ILooks
                     l.Colourway = Math.Clamp(kept.Colourway, 0, l.Colourways.Count - 1);
                 if (l.Pinned)
                 {
-                    _base       = l.Id;
+                    Choose(l.Id);
                     _graceUntil = now + LookRules.KeepGrace;
                     _graceCheck = true;
                 }
@@ -686,21 +711,24 @@ public sealed class LooksEngine : ILooks
         var made    = Capture(_now, now);
         var colours = ColourwayNow(made);
 
-        // exactly a pinned look: a wear of it (in the colourway it is in; colours it never had make a new outfit)
-        foreach (var look in _looks.Where(l => l.Pinned && Matching.Same(l, _now, _lens)).OrderByDescending(l => l.WithBody))
+        // exactly a pinned look (in one of its colourways, or one without any): a wear of the look being worn. The quiet
+        // minute never decides which look that is: it used to take the first in the list that matched, which took the
+        // outfit away from the look the user had just put on. Among twins nobody picked, no wear is counted (and no
+        // Lately entry: it is a pinned look)
+        if (Worn() is { } look)
         {
-            if (colours is not null && look.Colourways.Count > 0 && !look.Colourways.Any(c => KeyOf(c.Colours) == KeyOf(colours.Colours)))
-                continue;
             if (colours is not null)
                 look.Colourway = AddColourway(look, colours);
             Wear(look, now);
-            _base = look.Id;
             Changed();
             return;
         }
 
-        // the same outfit again: it moves to the front
-        if (_looks.FirstOrDefault(l => !l.Pinned && Matching.Same(l, _now, _lens) && SameColours(l, colours)) is { } again)
+        if (_looks.Any(l => l.Pinned && Matching.Count(l, _lens) > 0 && Matching.Same(l, _now, _lens) && ColoursOn(l)))
+            return;
+
+        // the same outfit again: it moves to the front (the latest of them, should colours not tell two apart)
+        if (_looks.Where(l => !l.Pinned && Matching.Same(l, _now, _lens) && SameColours(l, colours)).OrderByDescending(l => l.LastWornUtc).FirstOrDefault() is { } again)
         {
             // the same outfit: its pieces are the same, the body is the one that is on now
             again.Pieces = made.Pieces;
@@ -1045,33 +1073,136 @@ public sealed class LooksEngine : ILooks
         _version++;
     }
 
-    /// <summary> Which pinned look the outfit is, or started from (and whether it drifted too far from it). </summary>
+    /// <summary>
+    /// Which pinned look the outfit is, or started from. The rule, in order:
+    /// <list type="number">
+    /// <item>The look the user named (put on through the closet, clicked, pinned, updated) stays while the outfit still
+    /// fits it, whatever else fits too. A look the closet only guessed stays while nothing fits strictly better.</item>
+    /// <item>Right after a Keep of a look (<see cref="LookRules.KeepGrace"/>) it stays whatever is read.</item>
+    /// <item>Else the looks that fit are ranked by everything that tells them apart (<see cref="Rank"/>); one best is the
+    /// outfit's look; several equal ones are named together and the closet asks (<see cref="_maybe"/>), never picks.</item>
+    /// <item>Nothing fits: the look stays while no more than half of it changed (the "you changed …" case); so do equal
+    /// looks the closet was asking about.</item>
+    /// </list>
+    /// </summary>
     private void UpdateBase(DateTime now)
     {
         LookData? current = _base is { } id && _byId.TryGetValue(id, out var b) && b.Pinned ? b : null;
-        if (current is not null && Matching.Same(current, _now, _lens))
-            return;
-
-        // the outfit is exactly a pinned look: that one (also over an old look that holds only some of its shelves)
-        if (Best(_looks.Where(l => l.Pinned && Matching.Count(l, _lens) > 0 && Matching.Same(l, _now, _lens))) is { } exact)
+        var fits = _looks.Where(l => l.Pinned && Fits(l)).ToList();
+        if (current is not null && Fits(current))
         {
-            _base = exact.Id;
+            if (!_baseGuessed || Top(fits).Contains(current))
+            {
+                _maybe.Clear();
+                return;
+            }
+        }
+        else if (current is not null && now < _graceUntil)
+        {
+            return; // just kept: what is on may not be read yet
+        }
+
+        if (fits.Count > 0)
+        {
+            var top = Top(fits);
+            _maybe.Clear();
+            if (top.Count == 1)
+            {
+                _base        = top[0].Id;
+                _baseGuessed = true;
+            }
+            else
+            {
+                _base = null;
+                _maybe.AddRange(top.Select(l => l.Id));
+            }
+
             return;
         }
 
-        // the look it started from stays while it is on, or less than half of it changed (or while what was just kept is
-        // not read yet)
-        if (current is not null
-         && (now < _graceUntil || Matching.Covers(current, _now, _lens) || !Matching.TooFar(current, Matching.Diff(current, _now, _lens).Count, _lens)))
+        if (current is not null && !Matching.TooFar(current, Matching.Diff(current, _now, _lens).Count, _lens))
             return;
-
-        // else a pinned look that is on (an old look that holds only some shelves), or none
-        _base = Best(_looks.Where(l => l.Pinned && Matching.Count(l, _lens) > 0 && Matching.Covers(l, _now, _lens)))?.Id;
+        _base = null;
+        _maybe.RemoveAll(m => !_byId.TryGetValue(m, out var l) || Matching.TooFar(l, Matching.Diff(l, _now, _lens).Count, _lens));
     }
 
-    /// <summary> Of several looks that are on: the one holding the most pieces, then with body, then the last worn. </summary>
-    private LookData? Best(IEnumerable<LookData> looks)
-        => looks.OrderByDescending(l => Matching.Count(l, _lens)).ThenByDescending(l => l.WithBody).ThenByDescending(l => l.LastWornUtc).ThenBy(l => l.Id).FirstOrDefault();
+    /// <summary> The user named this look (see <see cref="_baseGuessed"/>). </summary>
+    private void Choose(Guid look)
+    {
+        _base        = look;
+        _baseGuessed = false;
+        _maybe.Clear();
+    }
+
+    /// <summary> The look is on: its pieces as it has them (<see cref="Matching.Covers"/>) and its colours (or colours that cannot tell). </summary>
+    private bool Fits(LookData look)
+        => Matching.Count(look, _lens) > 0 && Matching.Covers(look, _now, _lens) && ColoursOn(look);
+
+    /// <summary>
+    /// How well a look that fits says what is on, for telling looks apart: nothing else on that it would wear (exact), its
+    /// colours known to be these (a colourway, not just "colours cannot tell"), how many pieces, the body too, and how
+    /// many options and versions it names. Not when it was worn or made: that says nothing about what is on.
+    /// </summary>
+    private (int Exact, int Colours, int Pieces, int Body, int Named) Rank(LookData look)
+        => (Matching.Same(look, _now, _lens) ? 1 : 0,
+            ColourwayOn(look) >= 0 ? 1 : 0,
+            Matching.Count(look, _lens),
+            look.WithBody ? 1 : 0,
+            look.Pieces.Where(p => _lens.InScope(look, p)).Sum(p => p.Options.Count + (p.Version >= 0 ? 1 : 0)));
+
+    /// <summary> The looks of the best rank (several when they are equal). </summary>
+    private List<LookData> Top(List<LookData> looks)
+    {
+        if (looks.Count <= 1)
+            return looks;
+        var ranked = looks.Select(l => (Look: l, Rank: Rank(l))).ToList();
+        var best   = ranked.Max(r => r.Rank);
+        return ranked.Where(r => r.Rank == best).Select(r => r.Look).ToList();
+    }
+
+    /// <summary>
+    /// The pinned look the outfit is exactly, in its colours: the outfit's look when it is one, else the one best (null
+    /// when none, or several equal ones nobody picked).
+    /// </summary>
+    private LookData? Worn()
+    {
+        var exact = _looks.Where(l => l.Pinned && Fits(l) && Matching.Same(l, _now, _lens)).ToList();
+        if (_base is { } id && exact.FirstOrDefault(l => l.Id == id) is { } chosen)
+            return chosen;
+        var top = Top(exact);
+        return top.Count == 1 ? top[0] : null;
+    }
+
+    /// <summary>
+    /// The pinned look with the outfit's pieces when its colours differ (for a new colourway): the outfit's look if it is
+    /// one of them, else the only one; null when there are several and none was named.
+    /// </summary>
+    private LookData? TheSame()
+    {
+        var same = _looks.Where(l => l.Pinned && Matching.Count(l, _lens) > 0 && Matching.Same(l, _now, _lens)).ToList();
+        if (_base is { } id && same.FirstOrDefault(l => l.Id == id) is { } chosen)
+            return chosen;
+        return same.Count == 1 ? same[0] : null;
+    }
+
+    /// <summary>
+    /// The pinned look a remembered outfit is (the same pieces), for a pin that adds a colourway: the one that has its
+    /// colours already, else the outfit's look, else the only one; null when several are equally it (then it is pinned as
+    /// a look of its own rather than merged into the first that matches).
+    /// </summary>
+    private LookData? Twin(LookData lately)
+    {
+        var same = _looks.Where(p => p.Pinned && Matching.SamePieces(p, lately, _lens)).ToList();
+        if (same.Count <= 1)
+            return same.FirstOrDefault();
+        var keys    = lately.Colourways.Select(c => KeyOf(c.Colours)).ToHashSet();
+        var coloured = same.Where(p => keys.Count > 0 && p.Colourways.Any(c => keys.Contains(KeyOf(c.Colours)))).ToList();
+        if (coloured.Count == 1)
+            return coloured[0];
+        if (_base is { } id && same.FirstOrDefault(p => p.Id == id) is { } chosen)
+            return chosen;
+        return null;
+    }
 
     /// <summary> The names to show: the user's own, else the main piece's; pinned looks with the same made name get a number. </summary>
     private Dictionary<Guid, string> Names()
@@ -1144,7 +1275,7 @@ public sealed class LooksEngine : ILooks
         {
             state = CardState.Trying;
         }
-        else if (f.Missing == 0 && Matching.Covers(look, _now, _lens) && Matching.Count(look, _lens) > 0 && ColoursOn(look))
+        else if (f.Missing == 0 && Fits(look) && !TwinOfWorn(look))
         {
             state = CardState.On;
             if (ColourwayOn(look) is >= 0 and var on)
@@ -1198,9 +1329,19 @@ public sealed class LooksEngine : ILooks
         };
     }
 
+    /// <summary>
+    /// The look holds the same pieces as the look being worn (which the user put on, or the closet is sure of), and that
+    /// one is on: only that one is marked On, so two cards never both say On for one outfit.
+    /// </summary>
+    private bool TwinOfWorn(LookData look)
+        => _base is { } id && id != look.Id && _byId.TryGetValue(id, out var worn) && worn.Pinned && Fits(worn)
+        && Matching.SamePieces(worn, look, _lens);
+
     private WearingNow MakeWearing(Dictionary<Guid, string> names)
     {
         LookData? look = _base is { } id && _byId.TryGetValue(id, out var b) ? b : null;
+        if (look is null && _maybe.Count > 0)
+            return MakeMaybe(names);
         var diffs   = look is null ? new List<PieceDiff>() : Matching.Diff(look, _now, _lens);
         var colours = look is not null && diffs.Count == 0 && !ColoursOn(look);
         var changed = diffs.Where(d => d.Now is not null).Select(d => d.Socket).ToHashSet();
@@ -1220,6 +1361,31 @@ public sealed class LooksEngine : ILooks
             Tiles      = tiles,
             CanPin     = _now.AnyClothes && !exactly,
             CanUpdate  = look is not null && _now.AnyClothes && (diffs.Count > 0 || colours),
+        };
+    }
+
+    /// <summary>
+    /// "Wearing now" when several looks are equally the outfit: all of them named ("Gala night or Beach day"), what
+    /// changed, or a line that asks; no look to update until the user clicks the one they are wearing.
+    /// </summary>
+    private WearingNow MakeMaybe(Dictionary<Guid, string> names)
+    {
+        var looks = _maybe.Select(Find).OfType<LookData>().ToList();
+        var said  = looks.Select(l => names.GetValueOrDefault(l.Id) ?? NameOf(l)).ToList();
+        var name  = said.Count < 2 ? said.FirstOrDefault() ?? string.Empty : Loc.F("{0} or {1}", string.Join(", ", said.Take(said.Count - 1)), said[^1]);
+        var diffs = looks.Count == 0 ? new List<PieceDiff>() : Matching.Diff(looks[0], _now, _lens);
+        var changed = diffs.Where(d => d.Now is not null).Select(d => d.Socket).ToHashSet();
+        var exactly = _looks.Any(l => l.Pinned && Matching.Same(l, _now, _lens) && ColoursOn(l));
+        return new WearingNow
+        {
+            Look       = null,
+            Name       = name,
+            ChangeText = diffs.Count > 0 ? LookTexts.Change(diffs.Select(d => (d.Kind, Thing(looks[0], d))).ToList(), false)
+                                         : Loc.T("These looks are the same. Click the one you are wearing."),
+            Tiles      = _now.All.Where(w => !LookRules.IsBody(w.Shelf)).OrderBy(w => LookRules.Order(w.Shelf)).ThenBy(w => w.Key.Socket)
+                .Select(w => Tile(w, changed.Contains(w.Key.Socket))).ToList(),
+            CanPin     = _now.AnyClothes && !exactly,
+            CanUpdate  = false,
         };
     }
 
@@ -1274,6 +1440,7 @@ public sealed class LooksEngine : ILooks
         _byId.Remove(look.Id);
         if (_base == look.Id)
             _base = null;
+        _maybe.Remove(look.Id);
     }
 
     private void Changed()
@@ -1383,7 +1550,12 @@ public sealed class LooksEngine : ILooks
             AddLook(look);
         _removed.AddRange(file.Removed.Where(r => !_byId.ContainsKey(r.Id) && _removed.All(k => k.Id != r.Id)));
         _importedOld =   file.ImportedOld;
-        _base        ??= file.Base is { } b && _byId.ContainsKey(b) ? b : null;
+        if (_base is null && file.Base is { } b && _byId.ContainsKey(b))
+        {
+            // the last session's word, or its guess: it holds while nothing fits strictly better
+            _base        = b;
+            _baseGuessed = true;
+        }
         // what waited for the file (the old looks, the search for missing pieces) runs on the next poll
         _modsSeen  = int.MinValue;
         _viewDirty = true;

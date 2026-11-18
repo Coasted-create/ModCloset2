@@ -111,8 +111,49 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
     /// </summary>
     private readonly Dictionary<string, Owned> _owned = new(StringComparer.Ordinal);
 
-    /// <summary> A row of ours: what showed in its slot when it was written, and the entry written (to know it is still ours). </summary>
-    private sealed record Owned(string ShowKey, JObject Written);
+    /// <summary>
+    /// A row of ours: what showed in its slot when it was written, the entry written, and entries written there before
+    /// (newest first): a look saved by the wardrobe before a try and put on again later brings such an older entry back,
+    /// and it is still ours. <see cref="Transient"/>: written in the middle of a picker drag (not kept as "earlier").
+    /// </summary>
+    private sealed record Owned(string ShowKey, JObject Written, IReadOnlyList<JObject> Earlier, bool Transient = false)
+    {
+        public IReadOnlyList<JObject> Ours
+            => Earlier.Count == 0 ? new[] { Written } : Earlier.Prepend(Written).ToList();
+    }
+
+    /// <summary> Earlier entries kept per row (in memory), and of those in the store. </summary>
+    public const int EarlierKept = 12, EarlierStored = 3;
+
+    /// <summary> Rows of the areas whose colour the user just changed: they take it, whoever changed them since. </summary>
+    private readonly HashSet<string> _forceRows = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Rows of the areas the user just coloured or set to "its own" here, area by area: also when they are not ours (any
+    /// more), "its own" takes off whatever is on them.
+    /// </summary>
+    private readonly HashSet<string> _forceOwn = new(StringComparer.Ordinal);
+    private double _dyesReadAt = double.MinValue;
+
+
+    /// <summary> Rows left alone because someone else changed them (shown on the board, until the user colours that area). </summary>
+    private readonly HashSet<string> _leftAlone = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Rows of ours that were put back to the game's colour, with what the closet had written there: a look saved before
+    /// (the wardrobe's, before a try) and put on again later brings those entries back; they are put back again.
+    /// </summary>
+    private readonly Dictionary<string, IReadOnlyList<JObject>> _gone = new(StringComparer.Ordinal);
+    public const int GoneKept = 400;
+    private bool _wasBusy;
+    private bool _afterRedraw;
+    private double _lastRepairLog = double.MinValue;
+
+    /// <summary> The repair line in the log at most this often. </summary>
+    public const double RepairLogInterval = 60;
+
+    /// <summary> Glamourer calls made by the colours (for the tests: none at rest when colours are not used). </summary>
+    public int GlamourerCalls { get; private set; }
 
     /// <summary> The character the owned rows are on ("" unknown). </summary>
     private string _ownedBy = string.Empty;
@@ -239,6 +280,7 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                 return;
             PointNothingLocked(); // a lit area would hide the new colour
             Begin(Loc.T("Change the outfit colours"), WornParts());
+            var before = Targets();
             var p = _memory.Palette;
             rgb &= 0xFFFFFF;
             _memory.Palette = new OutfitPalette
@@ -248,6 +290,7 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                 Accent = role == ColourRole.Accent ? rgb : p.Accent,
                 Metal  = role == ColourRole.Metal ? rgb : p.Metal,
             };
+            ForceChanged(before); // the areas following this colour, nothing else
             Changed();
             if (done)
                 End();
@@ -307,9 +350,11 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             if (Find(bar, area) is not { } found || found.Area.Painted)
                 return;
             var (run, def) = found;
+            KnowDyes();
             PointNothingLocked(); // a lit area would hide the new colour
             Begin(Loc.F("Colour {0}", run.Showing.Name), new[] { run.MemoryKey });
-            _memory.Choose(run.MemoryKey, def, AreaChoice.ByHand(rgb));
+            _memory.Choose(run.MemoryKey, def, AreaChoice.ByHand(rgb), DyesOf(run));
+            Force(run, new[] { def });
             Changed();
             if (done)
                 End();
@@ -323,8 +368,10 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             if (Find(bar, area) is not { } found || found.Area.Painted)
                 return;
             var (run, def) = found;
+            KnowDyes();
+            Force(run, new[] { def });
             Step(Loc.F("Colour {0}", run.Showing.Name), new[] { run.MemoryKey }, () =>
-                _memory.Choose(run.MemoryKey, def, role == ColourRole.Own ? AreaChoice.Own : AreaChoice.Follow(role)));
+                _memory.Choose(run.MemoryKey, def, role == ColourRole.Own ? AreaChoice.Own : AreaChoice.Follow(role), DyesOf(run)));
         }
     }
 
@@ -334,11 +381,88 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
         {
             if (RunOf(bar) is not { Areas: { } areas } run)
                 return;
+            KnowDyes();
+            Force(run, areas);
             Step(Loc.F("Put {0} back to its own colours", run.Showing.Name), new[] { run.MemoryKey }, () =>
             {
                 foreach (var def in areas.Where(a => !a.Painted))
-                    _memory.Choose(run.MemoryKey, def, AreaChoice.Own);
+                    _memory.Choose(run.MemoryKey, def, AreaChoice.Own, DyesOf(run));
             });
+        }
+    }
+
+    /// <summary>
+    /// Gives every area of a piece that can be coloured the same colour by hand: the piece in one colour, as a game dye
+    /// does (every row takes the colour as it is; metal is tinted). Called many times while dragging; <paramref name="done"/> ends the step.
+    /// </summary>
+    public void SetPiece(string bar, uint rgb, bool done)
+    {
+        lock (_gate)
+        {
+            if (RunOf(bar) is not { Areas: { } areas } run || areas.All(a => a.Painted))
+                return;
+            KnowDyes();
+            PointNothingLocked();
+            Begin(Loc.F("Colour {0}", run.Showing.Name), new[] { run.MemoryKey });
+            foreach (var def in areas.Where(a => !a.Painted))
+                _memory.Choose(run.MemoryKey, def, AreaChoice.ByHand(rgb, flat: true), DyesOf(run));
+            Force(run, areas);
+            Changed();
+            if (done)
+                End();
+        }
+    }
+
+    /// <summary> Lets every area of a piece that can be coloured follow one outfit colour (or, with Own, the mod's own). </summary>
+    public void FollowPiece(string bar, ColourRole role)
+    {
+        lock (_gate)
+        {
+            if (RunOf(bar) is not { Areas: { } areas } run || areas.All(a => a.Painted))
+                return;
+            KnowDyes();
+            Force(run, areas);
+            Step(Loc.F("Colour {0}", run.Showing.Name), new[] { run.MemoryKey }, () =>
+            {
+                foreach (var def in areas.Where(a => !a.Painted))
+                    _memory.Choose(run.MemoryKey, def, role == ColourRole.Own ? AreaChoice.Own : AreaChoice.Follow(role), DyesOf(run));
+            });
+        }
+    }
+
+    /// <summary> The Glamourer keys of the rows of these areas, in every slot the piece shows in. </summary>
+    private static IEnumerable<string> RowKeys(Run run, IEnumerable<AreaDef> areas)
+        => areas.SelectMany(a => a.Rows).SelectMany(r => r.Slots.Where(run.Slots.Contains).Select(slot => ColourMath.MaterialKey(slot, r.Material, r.Row)));
+
+    /// <summary> The user asked for these areas now: their rows show what the closet says, whoever changed them since. </summary>
+    private void Force(Run run, IEnumerable<AreaDef> areas, bool explicitly = true)
+    {
+        foreach (var key in RowKeys(run, areas.Where(a => !a.Painted)))
+        {
+            _forceRows.Add(key);
+            if (explicitly)
+                _forceOwn.Add(key);
+            _leftAlone.Remove(key);
+        }
+    }
+
+    /// <summary>
+    /// Before the user colours a piece: the game dyes it wears now are known (they decide which of its colour sets the
+    /// choice goes into). Read from Glamourer when not read in the last second (the colours ask only when needed).
+    /// </summary>
+    private void KnowDyes()
+    {
+        var now = _options.Clock();
+        if (now - _dyesReadAt < 1 || !_glamourer.Available || _world.WhyNot.Length > 0)
+            return;
+        try
+        {
+            if (GetState(out _) is { } state)
+                ReadDyes(state);
+        }
+        catch (Exception ex)
+        {
+            _options.Log?.Invoke($"Mod Closet 2 colours: dyes not read: {ex.Message}");
         }
     }
 
@@ -394,6 +518,14 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                 Follow(now);
                 if (_lit is { } lit && now - lit.Seen > PointTimeout)
                     PointNothingLocked();
+                var busy = _world.Busy;
+                if (_wasBusy && !busy)
+                {
+                    // a redraw is over: a look put back may have brought old rows (looked at closely, once)
+                    _nextCheck   = Math.Min(_nextCheck, now + 0.5);
+                    _afterRedraw = true;
+                }
+                _wasBusy = busy;
                 if (_dirty && now >= _nextApply)
                     Apply(now);
                 else if (!_dirty && now >= _nextCheck)
@@ -423,10 +555,12 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             _step = null;
             if (_tryBase is not null)
                 DropTry(); // an undo while trying: the try goes, then the step is taken back
+            var before = Targets();
             if (!_memory.Restore(snapshot))
                 return;
             SaveMemory();
             BuildSaved();
+            ForceChanged(before); // what the undo changes, nothing else
             Changed();
         }
     }
@@ -583,9 +717,11 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                 return;
             }
 
+            var before = Targets();
             _tryBase ??= _memory.Copy();
             _memory.Assign(_tryBase);
             _memory.Restore(snapshot);
+            ForceChanged(before);
             Changed();
         }
     }
@@ -595,7 +731,11 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
     /// snapshots for the caller's own undo step (before the try, now), null when no try was on or nothing differs. Not
     /// keep: everything is as before the try (palette, switch, choices, what the character shows); returns null.
     /// </summary>
-    public (string Before, string After)? EndTry(bool keep)
+    /// <param name="byUser">
+    /// The user ended it (Put back, Keep, another try). False when the session ends it on its own (the wardrobe stopped
+    /// previewing): then nothing is taken over from what was coloured outside the closet.
+    /// </param>
+    public (string Before, string After)? EndTry(bool keep, bool byUser = true)
     {
         lock (_gate)
         {
@@ -604,7 +744,10 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             End();
             if (!keep)
             {
+                var targets = Targets();
                 DropTry();
+                if (byUser)
+                    ForceChanged(targets);
                 return null;
             }
 
@@ -672,6 +815,8 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
         if (_step is not { } step)
             return;
         _step = null;
+        foreach (var (key, owned) in _owned.Where(kv => kv.Value.Transient).ToList())
+            _owned[key] = owned with { Transient = false }; // the drag's last value is a value the user kept
         var after = _memory.Snapshot(step.Parts);
         if (after != step.Before && _tryBase is null) // during a colour try, changes belong to the try
         {
@@ -692,9 +837,38 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
     {
         End();
         Begin(description, parts);
+        var before = Targets();
         change();
+        ForceChanged(before);
         Changed();
         End();
+    }
+
+    /// <summary> What every area of every worn piece shows now (its colour and how it is made), to see what a change touches. </summary>
+    private Dictionary<(string Bar, int Area), string> Targets()
+    {
+        var map = new Dictionary<(string, int), string>();
+        foreach (var run in _runs)
+            if (run.Areas is { } areas)
+                for (var i = 0; i < areas.Count; ++i)
+                    map[(run.Id, i)] = Target(run, areas[i]) is { } t
+                        ? $"{t.Target.Hex:X6}/{(int)t.Follows}/{_memory.Choice(run.MemoryKey, areas[i], DyesOf(run)) is { Flat: true }}"
+                        : "own";
+        return map;
+    }
+
+    /// <summary>
+    /// The user's change reaches exactly the areas whose colour it changed: their rows take it, whoever touched them
+    /// since. Areas it did not change (also ones coloured outside the closet) are left as they are.
+    /// </summary>
+    private void ForceChanged(Dictionary<(string Bar, int Area), string> before)
+    {
+        foreach (var run in _runs)
+            if (run.Areas is { } areas)
+                for (var i = 0; i < areas.Count; ++i)
+                    if (Target(run, areas[i]) is var t && (t is { } x ? $"{x.Target.Hex:X6}/{(int)x.Follows}/{_memory.Choice(run.MemoryKey, areas[i], DyesOf(run)) is { Flat: true }}" : "own")
+                         != before.GetValueOrDefault((run.Id, i), "own"))
+                        Force(run, new[] { areas[i] }, explicitly: false);
     }
 
     private void Changed()
@@ -954,11 +1128,48 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
     // ======================================================================= what each area shows
 
     /// <summary> The colour an area should show, or null for the mod's own. </summary>
+    /// <summary> The game dyes per gear slot ("stain,stain2") as Glamourer said last; missing: not known yet. </summary>
+    private readonly Dictionary<int, string> _dyeOf = new();
+
+    private static readonly string[] SlotNames = { "Head", "Body", "Hands", "Legs", "Feet", "Ears", "Neck", "Wrists", "RFinger", "LFinger" };
+
+    /// <summary> The game dyes the piece wears now, "" when not known. </summary>
+    private string DyesOf(Run run)
+        => _dyeOf.GetValueOrDefault(run.Slots[0], string.Empty);
+
+    /// <summary>
+    /// The piece wears other game dyes than its remembered colours were made under (another outfit that dyes it its own
+    /// way): those colours wait for their dyes, and the outfit's own colours show.
+    /// </summary>
+    private bool Dormant(Run run)
+        => _memory.Dormant(run.MemoryKey, DyesOf(run));
+
+    /// <summary> Takes the dyes per slot from a Glamourer state. True when one of a worn piece's slots now says something else. </summary>
+    private bool ReadDyes(JObject state)
+    {
+        _dyesReadAt = _options.Clock();
+        var changed = false;
+        for (var slot = 0; slot < SlotNames.Length; ++slot)
+        {
+            if (state["Equipment"]?[SlotNames[slot]] is not JObject e)
+                continue;
+            var dyes = $"{e["Stain"]?.Value<int>() ?? 0},{e["Stain2"]?.Value<int>() ?? 0}";
+            if (_dyeOf.TryGetValue(slot, out var old) && old == dyes)
+                continue;
+            _dyeOf[slot] = dyes;
+            changed |= _runs.Any(r => r.Slots[0] == slot);
+        }
+
+        if (changed)
+            _rebuild = true;
+        return changed;
+    }
+
     private (Rgb Target, ColourRole Follows, bool Pinned)? Target(Run run, AreaDef area)
     {
         if (area.Painted)
             return null;
-        var choice = _memory.Choice(run.MemoryKey, area);
+        var choice = Dormant(run) ? null : _memory.Choice(run.MemoryKey, area, DyesOf(run));
         if (choice is { } c)
         {
             if (c.Hand is { } hand)
@@ -989,7 +1200,11 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                     continue;
                 foreach (var row in area.Rows)
                 {
-                    var values = lit ? Recolour.Lit(row) : Recolour.Row(row, area.Mean, target!.Value.Target, area.Metal);
+                    // "Details" gathers small rows of unrelated colours: their differences are not shading of one part, so
+                    // each takes the colour itself (otherwise a dark speck among light ones stays a dark grey)
+                    var flat   = area.Kind == AreaKind.Details || !Dormant(run) && _memory.Choice(run.MemoryKey, area, DyesOf(run)) is { Flat: true };
+                    var mean   = flat ? ColourMath.ToOk(row.Colour) : area.Mean;
+                    var values = lit ? Recolour.Lit(row) : Recolour.Row(row, mean, target!.Value.Target, area.Metal);
                     foreach (var slot in row.Slots.Where(run.Slots.Contains))
                         list.Add(new RowWrite(slot, row.Material, row.Row, values));
                 }
@@ -1011,6 +1226,9 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             _owned.Clear();
         }
 
+        _gone.Clear();
+        _leftAlone.Clear();
+        _dyeOf.Clear();
         _ownedBy = who;
         SaveOwned(); // at once: a restart on this character must not release the other one's rows
     }
@@ -1022,34 +1240,14 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             return; // stays dirty: applied when things allow it
 
         CheckOwner();
-        var wanted = Wanted();
-        var keys   = wanted.Select(w => w.Key).ToHashSet(StringComparer.Ordinal);
-
-        // rows of ours no longer wanted go back to the game's colours, unless their slot still shows the same thing and
-        // is only being read again (then they stay until the new reading says what to do, so nothing flickers)
-        var release = new List<(string Key, JObject Written)>();
-        var held    = new Dictionary<string, Owned>(StringComparer.Ordinal);
-        foreach (var (key, owned) in _owned)
+        if (!NeedsGlamourer())
         {
-            if (keys.Contains(key))
-                continue;
-            if (!final && ColourMath.TryParseMaterialKey(key, out var slot, out _, out _) && _slots.TryGetValue(slot, out var track)
-             && track.ShowKey == owned.ShowKey && _runs.FirstOrDefault(r => r.Slots.Contains(slot)) is { Areas: null })
-                held[key] = owned;
-            else
-                release.Add((key, owned.Written));
-        }
-
-        if (keys.Count == 0 && release.Count == 0)
-        {
-            // nothing of ours to put on or take off: no need to ask Glamourer
-            _applyProblem = string.Empty;
-            _dirty        = false; // a finished reading or a change of what shows asks again
-            _nextApply    = now + ApplyInterval;
+            // no rows of ours, nothing to put on: no need to ask Glamourer
+            Done(now);
             return;
         }
 
-        var state = _glamourer.GetState(_world.PlayerIndex, out var code);
+        var state = GetState(out var code);
         if (state is null)
         {
             _applyProblem = Says(code);
@@ -1057,11 +1255,65 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             return;
         }
 
-        var (materials, changed, notOurs) = GlamourerRows.Patch(state["Materials"], wanted, release);
+        ReadDyes(state); // before what is wanted: another outfit's dyes put remembered colours aside
+        var current = GlamourerRows.Canon(state["Materials"]);
+        var wanted  = new List<RowWrite>();
+        foreach (var w in Wanted())
+        {
+            // a row someone else coloured since (a Glamourer design with colours of its own, the user in Glamourer) is not
+            // painted over by the closet on its own; only when the user colours that area here now
+            var entry = current[w.Key];
+            if (_forceRows.Contains(w.Key) || !_leftAlone.Contains(w.Key) && (entry is null || GlamourerRows.IsRevert(entry))
+             || _owned.TryGetValue(w.Key, out var mine) && GlamourerRows.IsOurs(entry, mine.Ours)
+             || GlamourerRows.Same(entry, GlamourerRows.Entry(w.Values)))
+            {
+                wanted.Add(w);
+                _leftAlone.Remove(w.Key);
+            }
+            else if (_leftAlone.Add(w.Key))
+            {
+                _rebuild = true;
+            }
+        }
+
+        var keys = wanted.Select(w => w.Key).ToHashSet(StringComparer.Ordinal);
+
+        // rows of ours no longer wanted go back to the game's colours, unless their slot still shows the same thing and
+        // is only being read again (then they stay until the new reading says what to do, so nothing flickers)
+        var release = new List<GlamourerRows.Release>();
+        var held    = new Dictionary<string, Owned>(StringComparer.Ordinal);
+        foreach (var (key, owned) in _owned)
+        {
+            if (keys.Contains(key) || _leftAlone.Contains(key))
+                continue;
+            if (!final && ColourMath.TryParseMaterialKey(key, out var slot, out _, out _) && _slots.TryGetValue(slot, out var track)
+             && track.ShowKey == owned.ShowKey && _runs.FirstOrDefault(r => r.Slots.Contains(slot)) is { Areas: null })
+                held[key] = owned;
+            else
+                release.Add(new GlamourerRows.Release(key, owned.Ours, _forceRows.Contains(key)));
+        }
+
+        // the user asked for areas to show their own colour: their rows go back, whoever coloured them
+        foreach (var key in _forceOwn.Where(k => !keys.Contains(k) && !_owned.ContainsKey(k)))
+            release.Add(new GlamourerRows.Release(key, _gone.GetValueOrDefault(key) ?? Array.Empty<JObject>(), true));
+
+        // rows released before that show one of our old entries again (an old look put back on): back to the game's
+        foreach (var (key, ours) in _gone)
+            if (!keys.Contains(key) && !_owned.ContainsKey(key) && !_forceRows.Contains(key) && GlamourerRows.IsOurs(current[key], ours))
+                release.Add(new GlamourerRows.Release(key, ours));
+
+        var (materials, changed, notOurs) = GlamourerRows.Patch(current, wanted, release);
         if (notOurs.Count > 0)
+        {
             _options.Log?.Invoke($"Mod Closet 2 colours: {notOurs.Count} row(s) changed by someone else since; left as they are");
+            foreach (var key in notOurs)
+                _leftAlone.Add(key);
+            _rebuild = true;
+        }
+
         if (changed)
         {
+            ++GlamourerCalls;
             var result = _glamourer.ApplyState(GlamourerRows.MaterialsOnly(state, materials), _world.PlayerIndex, 0);
             if (result != 0)
             {
@@ -1071,10 +1323,27 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             }
         }
 
+        foreach (var r in release.Where(r => !notOurs.Contains(r.Key)))
+            if (_owned.TryGetValue(r.Key, out var gone))
+                _gone[r.Key] = gone.Ours.Concat(_gone.GetValueOrDefault(r.Key) ?? Array.Empty<JObject>()).Take(EarlierKept).ToList();
+        foreach (var key in keys)
+            _gone.Remove(key);
+        foreach (var key in notOurs)
+            _gone.Remove(key);
+        if (_gone.Count > GoneKept)
+            foreach (var key in _gone.Keys.Take(_gone.Count - GoneKept).ToList())
+                _gone.Remove(key);
+
         var before = string.Join(',', _owned.Keys.Order(StringComparer.Ordinal));
+        var old    = new Dictionary<string, Owned>(_owned, StringComparer.Ordinal);
         _owned.Clear();
         foreach (var w in wanted)
-            _owned[w.Key] = new Owned(_slots.TryGetValue(w.Slot, out var t) ? t.ShowKey : string.Empty, GlamourerRows.Entry(w.Values));
+        {
+            var entry   = GlamourerRows.Entry(w.Values);
+            var showKey = _slots.TryGetValue(w.Slot, out var t) ? t.ShowKey : string.Empty;
+            _owned[w.Key] = old.TryGetValue(w.Key, out var was) ? Next(was, entry, showKey) : new Owned(showKey, entry, Array.Empty<JObject>(), _step is not null);
+        }
+
         foreach (var (key, owned) in held)
             _owned[key] = owned;
         _ownedChanged = true;
@@ -1084,36 +1353,114 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             _nextOwnedSave = now + OwnedSaveInterval;
         }
 
+        // rows left alone that no worn area wants any more are not the board's business
+        var worn = _runs.Where(r => r.Areas is not null).SelectMany(r => RowKeys(r, r.Areas!)).ToHashSet(StringComparer.Ordinal);
+        if (_leftAlone.RemoveWhere(k => !worn.Contains(k)) > 0)
+            _rebuild = true;
+        Done(now);
+    }
+
+    private void Done(double now)
+    {
+        _forceRows.Clear();
+        _forceOwn.Clear();
         _applyProblem = string.Empty;
-        _dirty        = false;
+        _dirty        = false; // a finished reading or a change of what shows asks again
         _nextApply    = now + ApplyInterval;
         _nextCheck    = now + CheckInterval;
     }
 
+    /// <summary> A row of ours written again: the entry before it is kept as an earlier one of ours (not a drag's in-between ones). </summary>
+    private Owned Next(Owned was, JObject entry, string showKey)
+    {
+        if (GlamourerRows.Same(was.Written, entry))
+            return was with { ShowKey = showKey };
+        var earlier = was.Transient ? was.Earlier : was.Earlier.Prepend(was.Written).Take(EarlierKept).ToList();
+        return new Owned(showKey, entry, earlier, _step is not null);
+    }
+
     /// <summary>
-    /// Every few seconds while rows of ours should be on the character: when Glamourer came back (reloaded) or none of
-    /// our rows are in its state any more (its state was reset), they are put on again. A row someone changed is not a
-    /// sign of that (it is theirs now), only all of them gone.
+    /// Anything that needs Glamourer's state: rows of ours on the character or to take off, a lit area, or a worn piece
+    /// with colours remembered for it (or Dress everything on). Otherwise the colours never ask (at rest: no calls).
+    /// </summary>
+    /// <param name="atRest"> The plain look every few seconds: rows released earlier only matter right after a redraw. </param>
+    private bool NeedsGlamourer(bool atRest = false)
+        => _owned.Count > 0 || !atRest && _gone.Count > 0 || _forceRows.Count > 0 || _forceOwn.Count > 0 || _lit is not null
+         || _runs.Count > 0 && (_memory.DressEverything || _runs.Any(r => _memory.Knows(r.MemoryKey)));
+
+    private JObject? GetState(out int code)
+    {
+        ++GlamourerCalls;
+        return _glamourer.GetState(_world.PlayerIndex, out code);
+    }
+
+    /// <summary>
+    /// Every few seconds, and once half a second after the game redrew the character, while rows of ours are on it (or
+    /// worn pieces have colours remembered: their dyes are read).
+    /// <list type="bullet">
+    /// <item> Plain look: only a piece whose rows of ours are all gone is put on again (Glamourer reset or reloaded). A
+    /// single row reset (in Glamourer, on purpose, or by a design with "reset advanced dyes") is the user's: left as it is
+    /// until they colour that area here again, and the board says so. </item>
+    /// <item> After a redraw: single rows that are gone or show an earlier colour of ours are put on again, and released
+    /// rows that show one are taken off (the wardrobe put a look saved earlier back on). </item>
+    /// <item> A row someone else coloured is theirs: left alone, shown on the board. </item>
+    /// </list>
     /// </summary>
     private void CheckRowsStillThere(double now)
     {
         _nextCheck = now + CheckInterval;
+        var afterRedraw = _afterRedraw;
+        _afterRedraw = false;
         var available = _glamourer.Available;
         if (available && !_glamourerWas)
             _dirty = true; // Glamourer came back: our rows went with the old one
         _glamourerWas = available;
-        if (_dirty || !available || _owned.Count == 0 || _world.Busy || _world.WhyNot.Length > 0)
+        if (_dirty || !available || _world.Busy || _world.WhyNot.Length > 0 || !NeedsGlamourer(atRest: !afterRedraw))
             return;
         CheckOwner();
-        if (_owned.Count == 0)
+        var state = GetState(out _);
+        if (state is null)
             return;
-        var state = _glamourer.GetState(_world.PlayerIndex, out _);
-        if (state?["Materials"] is not JObject current)
+        if (ReadDyes(state))
+            _dirty = true;
+        if (_owned.Count == 0 && _gone.Count == 0 || state["Materials"] is not JObject raw)
             return;
-        var materials = GlamourerRows.Canon(current);
-        if (_owned.Keys.All(k => materials[k] is null || GlamourerRows.IsRevert(materials[k])))
+        var materials = GlamourerRows.Canon(raw);
+        bool Empty(JToken? e) => e is null || GlamourerRows.IsRevert(e);
+        var lost = 0;
+        foreach (var slot in _owned.Keys.GroupBy(k => ColourMath.TryParseMaterialKey(k, out var sl, out _, out _) ? sl : -1))
         {
-            _options.Log?.Invoke("Mod Closet 2 colours: Glamourer has none of our rows any more; putting them on again");
+            var keys = slot.Where(k => !_leftAlone.Contains(k)).ToList();
+            if (keys.Count > 0 && keys.All(k => Empty(materials[k])))
+            {
+                lost += keys.Count; // the whole piece lost its rows: Glamourer reset or reloaded
+                continue;
+            }
+
+            foreach (var key in keys)
+            {
+                var owned = _owned[key];
+                var entry = materials[key];
+                if (GlamourerRows.Same(entry, owned.Written, GlamourerRows.OursTolerance))
+                    continue;
+                if (afterRedraw && (Empty(entry) || GlamourerRows.IsOurs(entry, owned.Earlier)))
+                    ++lost;
+                else if ((Empty(entry) || !GlamourerRows.IsOurs(entry, owned.Earlier)) && _leftAlone.Add(key))
+                    _rebuild = true; // reset or coloured outside the closet: theirs until the user colours it here
+            }
+        }
+
+        if (afterRedraw)
+            lost += _gone.Count(kv => !_owned.ContainsKey(kv.Key) && GlamourerRows.IsOurs(materials[kv.Key], kv.Value));
+
+        if (lost > 0)
+        {
+            if (now - _lastRepairLog >= RepairLogInterval)
+            {
+                _options.Log?.Invoke($"Mod Closet 2 colours: {lost} row(s) of ours were gone or showed an earlier colour; putting them on again");
+                _lastRepairLog = now;
+            }
+
             _dirty = true;
         }
     }
@@ -1129,7 +1476,8 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             if (o["rows"] is JObject rows)
                 foreach (var p in rows.Properties())
                     if (ColourMath.TryParseMaterialKey(p.Name, out _, out _, out _) && p.Value is JObject row && row["w"] is JObject written)
-                        _owned[p.Name] = new Owned(row["s"]?.Value<string>() ?? string.Empty, written);
+                        _owned[p.Name] = new Owned(row["s"]?.Value<string>() ?? string.Empty, written,
+                            (row["e"] as JArray)?.OfType<JObject>().ToList() ?? new List<JObject>());
         }
         catch
         {
@@ -1145,7 +1493,10 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
         {
             var rows = new JObject();
             foreach (var (key, owned) in _owned)
-                rows[key] = new JObject { ["s"] = owned.ShowKey, ["w"] = owned.Written };
+                rows[key] = new JObject
+                {
+                    ["s"] = owned.ShowKey, ["w"] = owned.Written, ["e"] = new JArray(owned.Earlier.Take(EarlierStored).Cast<object>().ToArray()),
+                };
             _store.Set(KeyOwned, new JObject { ["owner"] = _ownedBy, ["rows"] = rows }.ToString(Newtonsoft.Json.Formatting.None));
         }
         catch
@@ -1192,17 +1543,23 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                 for (var i = 0; i < defs.Count; ++i)
                 {
                     var def    = defs[i];
-                    var target = Target(run, def);
-                    var choice = def.Painted ? null : _memory.Choice(run.MemoryKey, def);
-                    var pinned = choice?.Pinned ?? false;
+                    var target  = Target(run, def);
+                    var dormant = !def.Painted && Dormant(run); // its colours are made for other dyes (another outfit)
+                    var choice  = def.Painted || dormant ? null : _memory.Choice(run.MemoryKey, def, DyesOf(run));
+                    var pinned  = choice?.Pinned ?? false;
                     hasOwn |= pinned;
+                    var text = ShareText(def.Share, run.Showing.Piece);
+                    if (dormant)
+                        text = Loc.F("{0}. This outfit dyes it its own way; your colours for it come back with their dyes.", text);
+                    else if (!def.Painted && RowKeys(run, new[] { def }).Any(_leftAlone.Contains))
+                        text = Loc.F("{0}. Part of it was coloured outside the closet and is left as it is; colour it here to take it over.", text);
                     areas.Add(new ColourArea
                     {
                         Index     = i,
                         Share     = def.Share,
-                        Rgb       = (target is { } t ? Recolour.Colour(def.Colour, def.Mean, t.Target, def.Metal) : def.Colour).Hex,
+                        Rgb       = (target is { } t ? choice is { Flat: true } && !def.Metal ? t.Target : Recolour.Colour(def.Colour, def.Mean, t.Target, def.Metal) : def.Colour).Hex,
                         Label     = Label(def.Kind),
-                        ShareText = ShareText(def.Share, run.Showing.Piece),
+                        ShareText = text,
                         Follows   = target?.Follows ?? ColourRole.Own,
                         Pinned    = pinned,
                         Painted   = def.Painted,

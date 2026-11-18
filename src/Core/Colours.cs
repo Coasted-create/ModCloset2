@@ -154,6 +154,15 @@ public interface IOutfitColours
     /// <summary> Lets an area follow an outfit colour (or, with <see cref="ColourRole.Own"/>, go back to the mod's own colour). </summary>
     void Follow(string bar, int area, ColourRole role);
 
+    /// <summary>
+    /// The whole piece in one colour: every area at once, one undo step, as a game dye would do it (shading stays,
+    /// metal is tinted). Called many times while the colour field is dragged, with <paramref name="done"/> on release.
+    /// </summary>
+    void SetPiece(string bar, uint rgb, bool done) { }
+
+    /// <summary> Every area of the piece follows one colour of the outfit. </summary>
+    void FollowPiece(string bar, ColourRole role) { }
+
     /// <summary> Puts a whole piece back to the mod's own colours. </summary>
     void ResetPiece(string bar);
 

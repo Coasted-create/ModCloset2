@@ -71,6 +71,16 @@ public interface IPenumbraMods
     bool SetModPath(string directory, string path);
 }
 
+/// <summary>
+/// How many of the game's own files the photos have read since the plugin started (the game's <c>GameFiles</c>, a stand-in
+/// in the tests). Read from the photo worker; the numbers only grow.
+/// </summary>
+public interface IGameFileCounts
+{
+    /// <summary> Files read whole; files the game does not have; files that could not be read (refused, too large, failed). </summary>
+    (long Read, long Missing, long Failed) GameFileCounts { get; }
+}
+
 /// <summary> Where a wardrobe step stands. </summary>
 public enum StepState
 {

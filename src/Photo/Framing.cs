@@ -82,13 +82,16 @@ public static class Framing
 
     public static PhotoCamera Frame(PhotoScene scene, int width, int height, PhotoPools pools)
     {
+        if (scene.Kind is not (PieceKind.Gear or PieceKind.GearFromGame or PieceKind.Thing))
+            return FrameHuman(scene, width, height, pools);
+
         var aspect = width / (float)height;
         var piece  = true;
-        var count  = Centres(scene, piece, pools, out var facing, out var total);
+        var count  = Centres(scene, i => i.IsPiece == piece, pools, out var facing, out var total);
         if (count == 0)
         {
             piece = false; // nothing of its own to show: the skin it carries, at least
-            count = Centres(scene, piece, pools, out facing, out total);
+            count = Centres(scene, i => i.IsPiece == piece, pools, out facing, out total);
         }
 
         if (count == 0)
@@ -99,13 +102,100 @@ public static class Framing
         var back = total > 0 && facing / total < -0.35;
         var (direction, words) = Direction(scene.Socket, side, back);
 
-        var n = Corners(scene, piece, side, pools);
+        var n = Corners(scene, i => i.IsPiece == piece, side, pools);
         n = Context(scene, n, pools);
         return Fit(pools.Points.AsSpan(0, n), direction, aspect, words);
     }
 
+    /// <summary>
+    /// Hair, ears, tails, faces, makeup, bodies (brief 13). Never one half of a pair, never "from behind" by the
+    /// surface's facing (a hairstyle faces back as much as front); each kind has its view:
+    /// <list type="bullet">
+    /// <item> hair: three-quarter from the front, the whole hairstyle and the head under it in the picture; </item>
+    /// <item> ears: from the side, with the head; </item>
+    /// <item> a tail: from behind and a little to the side, with the hips around it when the game gives them; </item>
+    /// <item> a face: from the front and a little to the side; makeup and eyes: the front, framed on what the mod
+    /// changes (an iris looks at the eyes, with a little of the face around them); </item>
+    /// <item> a body: the whole figure from the front. </item>
+    /// </list>
+    /// </summary>
+    private static PhotoCamera FrameHuman(PhotoScene scene, int width, int height, PhotoPools pools)
+    {
+        var aspect = width / (float)height;
+        if (scene.Kind is PieceKind.Face or PieceKind.FaceTextures && !EyesOnly(scene))
+            return FrameHead(scene, aspect, pools);
+        Func<SceneItem, bool> framed = scene.Kind is PieceKind.Hair or PieceKind.EarShape
+            ? i => i.Role is ItemRole.Piece or ItemRole.Dummy
+            : i => i.IsPiece;
+        if (Centres(scene, framed, pools, out _, out _) == 0)
+            framed = _ => true;
+        if (Centres(scene, framed, pools, out _, out _) == 0)
+            return PhotoCamera.LookAt(new Vector3(0, 1, 0), Vector3.UnitZ, 3, FieldOfView, aspect, "nothing to see");
+
+        var (yaw, pitch, words) = scene.Kind switch
+        {
+            PieceKind.Hair         => (35f, 6f, "three-quarter, the whole hairstyle"),
+            PieceKind.EarShape     => (60f, 5f, "from the side, with the head"),
+            PieceKind.Tail         => (145f, 12f, "from behind, a little to the side"),
+            PieceKind.Face         => (20f, 3f, "front, a little to the side"),
+            PieceKind.FaceTextures => (12f, 2f, "front, on what the mod paints"),
+            _                      => (15f, 3f, "front, the whole figure"),
+        };
+        var y = yaw * MathF.PI / 180;
+        var p = pitch * MathF.PI / 180;
+        var direction = new Vector3(MathF.Sin(y) * MathF.Cos(p), MathF.Sin(p), MathF.Cos(y) * MathF.Cos(p));
+
+        var n = Corners(scene, framed, 0, pools);
+        n = scene.Kind == PieceKind.Tail ? Context(scene, n, pools, 0.35f, always: true) : Context(scene, n, pools);
+        return Fit(pools.Points.AsSpan(0, n), direction, aspect, words);
+    }
+
+    /// <summary>
+    /// How much of the picture's height a face's skin fills: the whole head with a margin, ears and the top of horns
+    /// mostly inside, the same size from card to card whatever the mod changes on it.
+    /// </summary>
+    public const float HeadFill = 0.55f;
+
+    /// <summary> Makeup that changes only the eyes (every mesh the mod changes is an eye): framed on the eyes. </summary>
+    private static bool EyesOnly(PhotoScene scene)
+    {
+        var any = false;
+        foreach (var item in scene.Items)
+        {
+            if (!item.IsPiece || item.Surface.Kind == SurfaceKind.Hidden)
+                continue;
+            if (item.Surface.Kind != SurfaceKind.Iris)
+                return false;
+            any = true;
+        }
+
+        return scene.Kind == PieceKind.FaceTextures && any;
+    }
+
+    /// <summary>
+    /// A face, sculpt or makeup: framed on the face's skin (the head itself, not what the mod paints, not horns or ears,
+    /// so every face comes out the same size), from the front and a little to the side. Without a face skin, on the
+    /// whole face model.
+    /// </summary>
+    private static PhotoCamera FrameHead(PhotoScene scene, float aspect, PhotoPools pools)
+    {
+        Func<SceneItem, bool> head = i => i.Role != ItemRole.Dummy && i.Surface.IsFace && i.Surface.Kind == SurfaceKind.SkinTextured;
+        if (Centres(scene, head, pools, out _, out _) == 0)
+            head = i => i.Role != ItemRole.Dummy;
+        if (Centres(scene, head, pools, out _, out _) == 0)
+            return PhotoCamera.LookAt(new Vector3(0, 1, 0), Vector3.UnitZ, 3, FieldOfView, aspect, "nothing to see");
+
+        // one view for sculpts and makeup: they share the face shelf, and the heads come out the same size
+        var (yaw, pitch, words) = (15f, 3f, "front, a little to the side, the whole head");
+        var y = yaw * MathF.PI / 180;
+        var p = pitch * MathF.PI / 180;
+        var direction = new Vector3(MathF.Sin(y) * MathF.Cos(p), MathF.Sin(p), MathF.Cos(y) * MathF.Cos(p));
+        var n = Corners(scene, head, 0, pools);
+        return Fit(pools.Points.AsSpan(0, n), direction, aspect, words, HeadFill);
+    }
+
     /// <summary> Each triangle's centre x and area into the pools; the area-weighted facing (normal z) and total area. </summary>
-    private static int Centres(PhotoScene scene, bool piece, PhotoPools pools, out double facing, out double total)
+    private static int Centres(PhotoScene scene, Func<SceneItem, bool> framed, PhotoPools pools, out double facing, out double total)
     {
         facing = 0;
         total  = 0;
@@ -114,7 +204,7 @@ public static class Framing
         PhotoPools.Ensure(ref pools.Area, scene.Arena.IndexCount / 3);
         foreach (var item in scene.Items)
         {
-            if (item.Surface.Kind == SurfaceKind.Hidden || item.IsPiece != piece)
+            if (item.Surface.Kind == SurfaceKind.Hidden || !framed(item))
                 continue;
             var m = item.Mesh;
             for (var t = m.IndexStart; t + 2 < m.IndexEnd; t += 3)
@@ -139,7 +229,7 @@ public static class Framing
     /// The vertices of the triangles framed (one half only when <paramref name="side"/> is not 0), each once, into the
     /// pools (a vertex is marked with the picture's stamp, so nothing has to be cleared).
     /// </summary>
-    private static int Corners(PhotoScene scene, bool piece, int side, PhotoPools pools)
+    private static int Corners(PhotoScene scene, Func<SceneItem, bool> framed, int side, PhotoPools pools)
     {
         var count = scene.Arena.VertexCount;
         PhotoPools.Ensure(ref pools.Points, count);
@@ -153,7 +243,7 @@ public static class Framing
         var n = 0;
         foreach (var item in scene.Items)
         {
-            if (item.Surface.Kind == SurfaceKind.Hidden || item.IsPiece != piece)
+            if (item.Surface.Kind == SurfaceKind.Hidden || !framed(item))
                 continue;
             var m = item.Mesh;
             for (var t = m.IndexStart; t + 2 < m.IndexEnd; t += 3)
@@ -178,7 +268,7 @@ public static class Framing
     /// piece's own corners: a bracelet alone at four fifths of the picture fills it with a wall of forearm that reads
     /// as a hip; with the wrist and the start of the hand it reads as a bracelet. Large pieces get none.
     /// </summary>
-    private static int Context(PhotoScene scene, int n, PhotoPools pools)
+    private static int Context(PhotoScene scene, int n, PhotoPools pools, float reachShare = 0.25f, bool always = false)
     {
         if (n == 0)
             return n;
@@ -191,9 +281,9 @@ public static class Framing
         }
 
         var size = (max - min).Length();
-        if (size >= SmallPiece)
+        if (size >= SmallPiece && !always)
             return n;
-        var reach = size * 0.25f;
+        var reach = size * reachShare;
         foreach (var item in scene.Items)
         {
             if (item.IsPiece || item.Surface.Kind == SurfaceKind.Hidden)
@@ -303,7 +393,7 @@ public static class Framing
     /// <see cref="Fill"/> of it in its larger direction, centred. Perspective makes the fit depend on the distance, so it
     /// is solved a few times; each pass centres the picture on what the last one saw.
     /// </summary>
-    public static PhotoCamera Fit(ReadOnlySpan<Vector3> points, Vector3 direction, float aspect, string words)
+    public static PhotoCamera Fit(ReadOnlySpan<Vector3> points, Vector3 direction, float aspect, string words, float fill = Fill)
     {
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
@@ -324,7 +414,7 @@ public static class Framing
             {
                 var d = p - target;
                 float x = Vector3.Dot(d, camera.Right), y = Vector3.Dot(d, camera.Up), z = Vector3.Dot(d, -camera.Forward);
-                need = Math.Max(need, Math.Max(MathF.Abs(x) / (Fill * camera.TanX), MathF.Abs(y) / (Fill * camera.TanY)) + z);
+                need = Math.Max(need, Math.Max(MathF.Abs(x) / (fill * camera.TanX), MathF.Abs(y) / (fill * camera.TanY)) + z);
             }
 
             distance = Math.Max(need, 0.02f);

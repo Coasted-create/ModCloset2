@@ -63,6 +63,8 @@ public sealed class AreaDef
 /// Groups a piece's colour table rows (across its materials) into a few areas a person would name. The rules and their
 /// numbers:
 /// <list type="number">
+/// <item> Rows of a pair the index map mixes over at least <see cref="MixedPair"/> of the smaller one's surface are one
+/// area from the start (a gradient between two colours is one part of the piece). </item>
 /// <item> Only rows that cover something take part. Metal rows (finish, see <see cref="RowInfo.IsMetal"/>) form one
 /// Metal area; glowing rows never merge with rows that do not glow. </item>
 /// <item> Rows are merged, closest first, while two groups are nearer than <see cref="MergeDistance"/> (OKLab × 100,
@@ -85,6 +87,9 @@ public static class AreaGrouper
     public const double MinShare = 0.03;
     public const float JoinDistance = 20f;
     public const double MinPainted = 0.01;
+
+    /// <summary> A pair whose mixed surface is at least this share of the smaller row's surface is one area. </summary>
+    public const double MixedPair = 0.25;
 
     /// <summary> The colour drawn for a part that could not be read (only for drawing: a quiet grey). </summary>
     public static readonly Rgb Unknown = Rgb.FromHex(0x6F6277);
@@ -146,6 +151,25 @@ public static class AreaGrouper
             g.Materials.Add(r.MaterialKey);
             return g;
         }).ToList();
+
+        // 0. the two rows of a pair that the index map mixes over much of their surface are one gradient on the piece:
+        //    one area (colouring only one of them would leave the other showing through the mix)
+        for (var i = 0; i < groups.Count; ++i)
+        {
+            var a = groups[i].Rows[0];
+            if (a.Row % 2 != 0)
+                continue;
+            var j = groups.FindIndex(g => g.Rows[0].MaterialKey == a.MaterialKey && g.Rows[0].Row == a.Row + 1);
+            if (j < 0 || groups[i].Metal != groups[j].Metal || groups[i].Glows != groups[j].Glows)
+                continue;
+            var b = groups[j].Rows[0];
+            if (a.Blended < MixedPair * Math.Min(a.Weight, b.Weight))
+                continue;
+            groups[i].Add(groups[j]);
+            groups.RemoveAt(j);
+            if (j < i)
+                --i;
+        }
 
         var metal = groups.Where(g => g.Metal).ToList();
         var cloth = groups.Where(g => !g.Metal).ToList();

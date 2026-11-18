@@ -13,7 +13,9 @@ namespace ModCloset2.Photo;
 public static partial class PhotoProblems
 {
     public const string Stopped = "stopped";
-    public const string NotGear = "only clothes and jewellery are photographed";
+    public const string NotTaken = "this kind of part is not photographed";
+    public const string NothingToDraw = "this kind of part has nothing to draw";
+    public const string NoModelOrTexture = "no model or picture for this part, in the mod or the game";
     public const string ModNotOpened = "the mod cannot be opened";
     public const string NoModel = "no model for this slot in the mod";
     public const string ModelNotInMod = "the model asked for is not in the mod";
@@ -24,7 +26,6 @@ public static partial class PhotoProblems
     public const string ModelTooBig = "the model file is larger than a picture may take";
     public const string TooManyTriangles = "the model has more triangles or vertices than a picture may take";
     public const string TooManyMaterials = "the model has more materials than a picture may take";
-    public const string TooManyTextures = "the piece has more textures than a picture may take";
     public const string TooManyTexels = "the piece's textures are larger than a picture may take";
     public const string TooMuchDrawing = "the model would take far more drawing than any piece needs";
 
@@ -61,8 +62,8 @@ public static partial class PhotoProblems
     /// <summary> Every fixed sentence (the exception's one aside, which carries a type name). </summary>
     public static readonly IReadOnlyList<string> All =
     [
-        Stopped, NotGear, ModNotOpened, NoModel, ModelNotInMod, ModelMissing, ModelNotOpened,
-        ModelTooBig, TooManyTriangles, TooManyMaterials, TooManyTextures, TooManyTexels, TooMuchDrawing,
+        Stopped, NotTaken, NothingToDraw, NoModelOrTexture, ModNotOpened, NoModel, ModelNotInMod, ModelMissing, ModelNotOpened,
+        ModelTooBig, TooManyTriangles, TooManyMaterials, TooManyTexels, TooMuchDrawing,
         .. ModelReason.All.Select(r => ModelUnreadablePrefix + r),
     ];
 

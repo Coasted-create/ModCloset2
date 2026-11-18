@@ -21,8 +21,17 @@ public enum SurfaceKind
     /// <summary> A material the mod does not ship (the game's own) or that cannot be read: a neutral colour. </summary>
     Missing,
 
-    /// <summary> Not drawn: shadow-only meshes, hair and eyes. </summary>
+    /// <summary> Not drawn: shadow-only meshes, and hair and eyes on clothes. </summary>
     Hidden,
+
+    /// <summary> Hair (and tails, brows, lashes): strands in the fixed hair colours, cut out by the normal map's alpha. </summary>
+    Hair,
+
+    /// <summary> An eye: its colour picture, tinted by a fixed eye colour where the mask says. </summary>
+    Iris,
+
+    /// <summary> Skin that is the piece (a face, makeup, a body): its own textures in the neutral skin tone. </summary>
+    SkinTextured,
 }
 
 /// <summary> One row of a colour table, as the shader needs it (colours linear, as the game keeps them). </summary>
@@ -131,8 +140,18 @@ public sealed class PhotoSurface
     /// <summary> The row comes from the normal map's alpha (older materials without an index map). </summary>
     public bool RowFromNormalAlpha { get; init; }
 
-    /// <summary> Local files of the textures the shader uses (null: none, or not shipped by the mod). </summary>
-    public string? IndexFile, NormalFile, MaskFile, DiffuseFile, SpecularFile;
+    /// <summary> The files of the textures the shader uses (null: none, or nobody provides it). </summary>
+    public FileRef? IndexFile, NormalFile, MaskFile, DiffuseFile, SpecularFile;
+
+    /// <summary> The texture files that are there. </summary>
+    public IEnumerable<FileRef> Files
+        => new[] { IndexFile, NormalFile, MaskFile, DiffuseFile, SpecularFile }.Where(f => f is not null).Select(f => f!.Value);
+
+    /// <summary> The material or one of its textures comes from the mod (what the mod changes). </summary>
+    public bool FromMod;
+
+    /// <summary> Skin of a face (not its teeth): where face paint goes. </summary>
+    public bool IsFace;
 
     /// <summary> The decoded textures (filled after framing, at the mip level the picture needs). </summary>
     public TexImage? Index, Normal, Mask, Diffuse, Specular;

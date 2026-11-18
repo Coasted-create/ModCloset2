@@ -37,6 +37,19 @@ public sealed record PhotoBudget
 
     /// <summary> A texture file read whole (from a pack) may be at most this large. </summary>
     public long MaxTextureFileBytes { get; init; } = 96L << 20;
+
+    /// <summary>
+    /// The game's files one picture may read (brief 13, review 7): the game gives whole files, so this is what a picture
+    /// can allocate from the game. Past it, what is left is drawn without (a texture) or left out (a dummy's file). Real
+    /// pieces read 3 to 46 MB here (a recolour's textures, makeup on the game's face, cold); a 4K texture is 21 MB.
+    /// </summary>
+    public long MaxGameBytes { get; init; } = 128L << 20;
+
+    /// <summary>
+    /// Questions to the game ("is this file there?") one picture may ask: the recolour's and hair's searches, the head,
+    /// the materials' places. The sheet's pictures ask at most 28; a piece of 40 materials none of which the game has could ask about 250. Past it, nothing more is asked.
+    /// </summary>
+    public int MaxGameAsks { get; init; } = 400;
 }
 
 /// <summary>
@@ -110,6 +123,47 @@ public static partial class Visibility
         }
 
         return hidden;
+    }
+
+    /// <summary>
+    /// A face's optional features (review of 0.6.0): the scars, tattoos and marks a character may choose are parts of
+    /// the face model marked atr_fv_a to atr_fv_h ("separate part of a face hidden by character customizations"), which
+    /// the game shows only for the features chosen; nobody has chosen any for a picture. Bit i set: attribute i is such a
+    /// part and stays off. Kept on: a part on none of the materials features are painted with (the face's skin, its
+    /// "etc" materials other than the lashes): a sculpt's own additions (horns, ears) that its author put on a feature's
+    /// switch; a part an ATR edit of an option that is on switches on; everything when <paramref name="featuresMod"/>
+    /// (the mod is about the features themselves).
+    /// </summary>
+    public static uint FaceFeaturesOff(PhotoModel model, ModDefinition def, bool featuresMod)
+    {
+        if (featuresMod)
+            return 0;
+        var attributes = model.Attributes;
+        uint carriers = 0;
+        for (var j = 0; j < model.Materials.Count && j < 32; ++j)
+        {
+            var name = model.Materials[j];
+            var file = name[(name.LastIndexOf('/') + 1)..];
+            if (file.Contains("_fac_", StringComparison.Ordinal) && !file.Contains("teeth", StringComparison.Ordinal)
+                || file.Contains("_etc_", StringComparison.Ordinal) && !file.Contains("lash", StringComparison.Ordinal))
+                carriers |= 1u << j;
+        }
+
+        List<(int Group, int Option, OptionDef Def)>? applied = null;
+        uint off = 0;
+        for (var i = 0; i < attributes.Count && i < 32; ++i)
+        {
+            if (!attributes[i].StartsWith("atr_fv_", StringComparison.Ordinal))
+                continue;
+            var materials = i < model.AttributeMaterials.Length ? model.AttributeMaterials[i] : 0;
+            if (materials != 0 && (materials & carriers) == 0)
+                continue; // the sculpt's own part, not a feature painted on the face
+            applied ??= def.AppliedByDefault();
+            if (!applied.Any(a => a.Def.Metas.Any(m => m.Type == "atr" && m.Attribute == attributes[i] && m.Entry == true)))
+                off |= 1u << i;
+        }
+
+        return off;
     }
 
     private static bool AtrOff(string attribute, Socket socket, int set, List<(int Group, int Option, OptionDef Def)> applied)

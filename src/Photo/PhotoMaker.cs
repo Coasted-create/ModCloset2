@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ModCloset2.Colours;
 using ModCloset2.Core;
 using ModCloset2.Detect;
 
@@ -25,6 +26,15 @@ public sealed class PhotoReport
     public bool LightBackdrop { get; set; }
     public List<string> Textures { get; } = new();
     public List<string> Missing { get; } = new();
+
+    public PieceKind Kind { get; set; }
+
+    /// <summary> Questions this picture asked the game, and bytes the game gave it (not those kept from before). </summary>
+    public int GameAsks { get; set; }
+
+    /// <summary> The camera the picture was taken with (for the tests: faces come out the same size). </summary>
+    public PhotoCamera? Camera { get; set; }
+    public long GameBytes { get; set; }
 
     public double TotalMs
         => ReadMs + FrameMs + TextureMs + DrawMs + EncodeMs;
@@ -68,20 +78,62 @@ public sealed class PhotoMaker : IPhotoMaker
     private ModSource? _source;
     private ModFiles? _files;
 
-    public PhotoMaker()
-        : this(PhotoBudget.Default)
+    private readonly IGameFiles? _gameFiles;
+
+    /// <summary>
+    /// The mods pictures stood on lately (<see cref="PhotoAsk.Under"/>: a makeup shelf stands on the same few sculpts),
+    /// by folder, with the stamp they were read with; at most <see cref="MaxUnder"/>, let go in <see cref="Rest"/>.
+    /// </summary>
+    private readonly List<(string Path, string Key, UnderMod Mod)> _under = new();
+
+    /// <summary> Mods one picture may stand on (the closet gives the best few), and mods kept open between pictures. </summary>
+    public const int MaxUnder = 4;
+
+    /// <summary> The game's files the maker reads through (null without them), kept between takes until <see cref="Rest"/>. </summary>
+    private GameCache? _game;
+
+    /// <param name="game"> The game's own files, for what a mod does not bring (brief 13); null draws from the mod alone. </param>
+    public PhotoMaker(IGameFiles? game = null)
+        : this(PhotoBudget.Default, game)
     {
     }
 
-    public PhotoMaker(PhotoBudget budget)
-        => _budget = budget;
+    public PhotoMaker(PhotoBudget budget, IGameFiles? game = null)
+    {
+        _budget    = budget;
+        _gameFiles = game;
+        _game      = game is null ? null : new GameCache(game);
+    }
 
     public int Version
         => 1;
 
+    /// <summary>
+    /// 1 for every kind of part but faces. The clothes and jewellery drawn in 0.5 come out the same, so none of them is
+    /// taken again; hair and the rest as in 0.6.0. Faces and face textures are 2 (after 0.6.0): a face's optional
+    /// features (scars, marks) are left off, makeup stands on its sculpt (<see cref="PhotoAsk.Under"/>), every head is
+    /// framed whole at one size, and a face's missing skin is the race's plain skin rather than grey.
+    /// </summary>
+    public int VersionOf(Socket socket)
+        => socket is Socket.Face or Socket.FaceTextures ? 2 : 1;
+
+    /// <summary> Gear, hair, ears, tails, faces, makeup, bodies and skin, weapons and the rest (brief 13). </summary>
+    public bool Takes(Socket socket)
+        => socket is >= Socket.Head and <= Socket.OffHand or Socket.Hair or Socket.Face or Socket.Tail or Socket.EarShape
+            or Socket.BodyBase or Socket.FaceTextures or Socket.Other;
+
+    /// <summary> Game files read since the maker was made, and asked for but not there (for the closet's log line). </summary>
+    public (int Read, int Missing) GameFileCounts
+        => (_reads + (_game?.Reads ?? 0), _missing + (_game?.Missing ?? 0));
+
+    private int _reads, _missing;
+
+    /// <summary> The take's files while it runs (its game counts go to the report). </summary>
+    private PhotoFiles? _take;
+
     /// <summary> The working memory held between pictures, by part (for the report and the log). </summary>
     public IReadOnlyList<(string Part, long Bytes)> Held()
-        => _pools.Held();
+        => _pools.Held().Append(("game files", _game?.HeldBytes ?? 0)).ToList();
 
     /// <summary> What the last <see cref="Take"/> took and found missing. </summary>
     public PhotoReport LastReport { get; private set; } = new();
@@ -106,6 +158,9 @@ public sealed class PhotoMaker : IPhotoMaker
         }
         finally
         {
+            if (_take is { } files)
+                (report.GameAsks, report.GameBytes) = (files.GameAsks, files.GameBytes);
+            _take = null;
             if (_pools.HeldBytes > MaxHeldBytes)
                 _pools = new PhotoPools();
         }
@@ -116,34 +171,45 @@ public sealed class PhotoMaker : IPhotoMaker
         _pools = new PhotoPools();
         _jpeg  = new JpegWriter();
         Forget();
+        foreach (var u in _under)
+            u.Mod.Source.Dispose();
+        _under.Clear();
+        if (_game is not null)
+        {
+            // the dummy's files go too; the counts stay for the log
+            (_reads, _missing) = (_reads + _game.Reads, _missing + _game.Missing);
+            _game = new GameCache(_gameFiles!);
+        }
     }
 
     private PhotoShot TakeUnsafe(PhotoAsk ask, CancellationToken stop, PhotoReport report)
     {
-        if (!GamePaths.IsGear(ask.Socket))
-            return new PhotoShot { Problem = PhotoProblems.NotGear, Detail = ask.Socket.ToString() };
+        if (!Takes(ask.Socket))
+            return new PhotoShot { Problem = PhotoProblems.NotTaken, Detail = ask.Socket.ToString() };
         // a card's picture is 170 wide (340 on a sharp screen): 512 is plenty, and the drawing buffers grow with its square
         var width  = Math.Clamp(ask.Width, 64, MaxWidth) / 4 * 4;
         var height = width * 5 / 4;
 
         var watch = Stopwatch.StartNew();
-        if (Open(ask.ModFolder) is not var (source, files))
+        if (Open(ask.ModFolder) is not var (source, mod))
             return new PhotoShot { Problem = PhotoProblems.ModNotOpened, Detail = ask.ModFolder };
 
-        var (model, option, race) = (ask.ModelGamePath, ask.Option, ask.Race);
-        if (model.Length == 0)
-        {
-            // what the closet asks: the slot and the player's race; the model comes from the definition alone
-            if (ModelChoice.Choose(files, ask.Socket, ask.Race) is not { } chosen)
-                return new PhotoShot { Problem = PhotoProblems.NoModel, Detail = $"{ask.Socket} in {ask.ModFolder}" };
-            (model, option, race) = (chosen.GamePath, string.Empty, chosen.Race);
-        }
+        // what the picture is made of, from the definition and (for what the mod does not bring) the game's paths
+        _pools.Begin();
+        var files = new PhotoFiles(source, mod, _game, _pools, _budget, stop, OpenUnder(ask));
+        _take = files;
+        var plan  = PartPlanner.Plan(files, ask);
+        report.Kind = plan.Kind;
+        if (plan.Problem.Length > 0)
+            return new PhotoShot { Problem = plan.Problem, Detail = plan.Detail };
 
         stop.ThrowIfCancellationRequested();
-        _pools.Begin();
-        var scene = SceneReader.Read(source, files, ask.Socket, model, option, race, _pools, _budget);
+        if (plan.Kind == PieceKind.Flat)
+            return TakeFlat(files, plan, width, height, report, watch);
+
+        var scene = SceneReader.Read(files, plan, _pools, _budget);
         report.ModelGamePath = scene.ModelGamePath;
-        report.Race          = race;
+        report.Race          = plan.Race;
         report.ReadMs        = watch.Elapsed.TotalMilliseconds;
         report.Triangles     = scene.Triangles;
         report.Missing.AddRange(scene.Missing);
@@ -154,11 +220,13 @@ public sealed class PhotoMaker : IPhotoMaker
         watch.Restart();
         var camera = Framing.Frame(scene, width, height, _pools);
         report.View    = camera.Description;
+        report.Camera  = camera;
         report.FrameMs = watch.Elapsed.TotalMilliseconds;
 
         stop.ThrowIfCancellationRequested();
         watch.Restart();
-        TextureLoader.Load(scene, source, camera, width, height, _pools, _budget, stop);
+        files.UseGame = plan.Kind != PieceKind.Gear;
+        TextureLoader.Load(scene, files, camera, width, height, _pools, _budget, stop);
         report.TextureMs = watch.Elapsed.TotalMilliseconds;
         report.BytesRead = scene.BytesRead;
         report.Textures.AddRange(scene.Textures);
@@ -180,7 +248,33 @@ public sealed class PhotoMaker : IPhotoMaker
         if (report.Seen < NothingShare)
             return new PhotoShot { Nothing = true };
 
-        stop.ThrowIfCancellationRequested();
+        return Encode(image, width, height, report, watch);
+    }
+
+    /// <summary> The flat picture: the part's texture as it is, when there is nothing to put it on. </summary>
+    private PhotoShot TakeFlat(PhotoFiles files, PartPlan plan, int width, int height, PhotoReport report, Stopwatch watch)
+    {
+        var file = plan.Flat!.Value;
+        report.ModelGamePath = file.GamePath;
+        report.View          = "the texture itself, flat";
+        var image = TextureLoader.Read(files, file, 512, _pools, _budget, out var header, out var why);
+        report.ReadMs = watch.Elapsed.TotalMilliseconds;
+        if (image is null)
+            return new PhotoShot { Problem = PhotoProblems.NoModelOrTexture, Detail = $"{file.GamePath}: {why}" };
+        report.Textures.Add($"{SceneReader.Name(file.GamePath)} {image.Width}x{image.Height} (of {header.Width}x{header.Height})");
+
+        watch.Restart();
+        var oneChannel = header.Format is TexDecoder.Bc4 or TexDecoder.L8 or TexDecoder.A8;
+        var flat = Studio.Flat(image, oneChannel, width, height, _pools);
+        report.DrawMs = watch.Elapsed.TotalMilliseconds;
+        report.Seen   = flat.Seen / (double)(width * height);
+        if (report.Seen < NothingShare)
+            return new PhotoShot { Nothing = true };
+        return Encode(flat, width, height, report, watch);
+    }
+
+    private PhotoShot Encode(PhotoImage image, int width, int height, PhotoReport report, Stopwatch watch)
+    {
         watch.Restart();
         var file = _jpeg.Encode(image.Rgba.AsSpan(0, width * height * 4), width, height);
         report.EncodeMs = watch.Elapsed.TotalMilliseconds;
@@ -204,6 +298,52 @@ public sealed class PhotoMaker : IPhotoMaker
         _files  = new ModFiles(ModDefinition.Read(source));
         _modKey = key;
         return (_source, _files);
+    }
+
+    /// <summary>
+    /// The mods the ask says the picture may stand on, opened like any mod (same reader, same distrust), the first
+    /// <see cref="MaxUnder"/> that open; the mod itself and folders that cannot be opened are passed over.
+    /// </summary>
+    private List<UnderMod> OpenUnder(PhotoAsk ask)
+    {
+        var list = new List<UnderMod>();
+        if (ask.Under is not { Count: > 0 } under)
+            return list;
+        foreach (var path in under.Take(MaxUnder * 2))
+        {
+            if (list.Count >= MaxUnder || string.IsNullOrWhiteSpace(path))
+                break;
+            var key = Stamp(path);
+            if (key.Length == 0 || key == _modKey)
+                continue;
+            var at = _under.FindIndex(u => u.Path == path);
+            if (at >= 0 && _under[at].Key == key)
+            {
+                list.Add(_under[at].Mod);
+                continue;
+            }
+
+            if (at >= 0)
+            {
+                _under[at].Mod.Source.Dispose();
+                _under.RemoveAt(at);
+            }
+
+            if (ModSource.Open(path) is not { } source)
+                continue;
+            var mod = new UnderMod(source, new ModFiles(ModDefinition.Read(source)));
+            _under.Add((path, key, mod));
+            list.Add(mod);
+        }
+
+        // keep the latest few open; the oldest go (never one this picture uses)
+        while (_under.Count > MaxUnder && _under.FindIndex(u => !list.Contains(u.Mod)) is var old and >= 0)
+        {
+            _under[old].Mod.Source.Dispose();
+            _under.RemoveAt(old);
+        }
+
+        return list;
     }
 
     private void Forget()

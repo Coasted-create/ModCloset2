@@ -113,7 +113,12 @@ public sealed class Plugin : IDalamudPlugin
             Session.PhotoFolder = Path.Combine(configDir, "photos");
             Session.PhotosWait  = () => _game.Zoning || _game.InCutscene || _game.GPosing || _game.InCombatOrDuty;
             Session.PhotoRace   = () => _game.Player().RaceCode;
-            Session.PhotoMaker  = new ModCloset2.Photo.PhotoMaker();
+            // the photos' lines (one summary per stretch of work, failures once a session) reach Dalamud's log file
+            Session.PhotoLog = m => _log.Information($"Mod Closet 2: {m}");
+            // the game's own unmodded files (read on the photo worker, never on the frame), counted for the summary line
+            var gameFiles = new ModCloset2.Game.GameFiles(new LuminaGameFiles(data), Session.PhotoLog);
+            Session.PhotoGameFiles = gameFiles;
+            Session.PhotoMaker  = new ModCloset2.Photo.PhotoMaker(gameFiles);
 
             // the colours: what shows comes from the session's tries and the wardrobe's kept outfit, their memory is kept
             // with the session's remembered things, and every change is one step of the session's history
@@ -155,6 +160,8 @@ public sealed class Plugin : IDalamudPlugin
             _pi.UiBuilder.Draw       += _windows.Draw;
             _pi.UiBuilder.Draw       += _onYou.Draw; // after the windows: its GridHovered comes last in the frame
             _pi.UiBuilder.OpenMainUi += _window.Toggle;
+            // Dalamud's plugin list: the cog opens the closet with the settings sheet showing
+            _pi.UiBuilder.OpenConfigUi += _window.OpenSettings;
             _framework.Update        += OnFrameworkUpdate;
         }
         catch
@@ -445,7 +452,11 @@ public sealed class Plugin : IDalamudPlugin
         if (_window is not null)
         {
             Step("window", () => _pi.UiBuilder.Draw       -= _windows.Draw);
-            Step("window", () => _pi.UiBuilder.OpenMainUi -= _window.Toggle);
+            Step("window", () =>
+            {
+                _pi.UiBuilder.OpenMainUi   -= _window.Toggle;
+                _pi.UiBuilder.OpenConfigUi -= _window.OpenSettings;
+            });
         }
         Step("language", () => _pi.LanguageChanged -= OnDalamudLanguageChanged);
         Step("command", () => _commands.RemoveHandler(Command));

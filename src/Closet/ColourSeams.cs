@@ -132,8 +132,8 @@ public sealed class ColourTryLayer(OutfitColours colours) : ITryColours
     public void TryOn(string snapshot)
         => colours.TryOn(snapshot);
 
-    public (string Before, string After)? EndTry(bool keep)
-        => colours.EndTry(keep);
+    public (string Before, string After)? EndTry(bool keep, bool byUser = true)
+        => colours.EndTry(keep, byUser);
 
     public void Restore(string snapshot)
         => colours.Restore(snapshot);

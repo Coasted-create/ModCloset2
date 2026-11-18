@@ -27,6 +27,18 @@ public sealed partial class ClosetSession
     /// <summary> The player's race code, for the model the maker draws (0: the maker picks). </summary>
     public Func<int>? PhotoRace { get; set; }
 
+    /// <summary> The game's files the maker reads, counted for the worker's summary line; null: no count in it. </summary>
+    public IGameFileCounts? PhotoGameFiles { get; set; }
+
+    /// <summary>
+    /// Where the photos' lines go: the summary of each stretch of work and the once-a-session failures (never a line per
+    /// photo). The plugin logs them at Information level so they reach Dalamud's log file; the session's own log otherwise.
+    /// </summary>
+    public Action<string>? PhotoLog { get; set; }
+
+    private Action<string>? PhotoLogOrSession
+        => PhotoLog ?? _log;
+
     /// <summary> The width of a photo; the height is 5/4 of it (the shape of a card's picture). </summary>
     public const int PhotoWidth = 384;
 
@@ -57,6 +69,9 @@ public sealed partial class ClosetSession
     /// <summary> The plugin's version: a take that failed is tried once more under another one. </summary>
     private static readonly string PluginVersion = typeof(ClosetSession).Assembly.GetName().Version?.ToString() ?? "0";
 
+    /// <summary> For the tests: the plugin version the photos are kept under (the assembly's own otherwise). </summary>
+    internal string PhotoPluginVersion { get; set; } = PluginVersion;
+
     private PhotoWorker? _photoWorker;
     private bool _photoWorkerTried;
 
@@ -84,13 +99,13 @@ public sealed partial class ClosetSession
 
     /// <summary> Nothing is left to photograph for this key (library, places, maker, switch, face, shelf): the frame skips the queue. </summary>
     private bool _photoDone;
-    private (int Library, int Place, int Maker, bool Off, bool Face, string Shelf, int Order, int List) _photoDoneFor;
+    private (int Library, int Place, int MakerSig, bool Off, bool Face, string Shelf, int Order, int List) _photoDoneFor;
 
     // where "the rest of the shelf" and "everything else" have got to
     private (string Shelf, int List) _shelfWalkFor = (string.Empty, -1);
     private int _shelfWalk;
     private List<LibPart> _allThings = new();
-    private int _allThingsFor = -1;
+    private (int Place, int MakerSig) _allThingsFor = (-1, 0);
     private int _allWalk;
     private int _allClean;
     private int _prunedFor = -1;
@@ -98,7 +113,7 @@ public sealed partial class ClosetSession
 
     // the settings sheet's count
     private (int Taken, int Total) _photoCount;
-    private int _photoCountPlace = -1;
+    private (int Place, int MakerSig) _photoCountPlace = (-1, 0);
     private bool _photoCountDirty = true;
     private DateTime _photoCountAt = DateTime.MinValue;
 
@@ -114,6 +129,61 @@ public sealed partial class ClosetSession
 
     private bool PhotosOn
         => PhotoMaker is not null && PhotoFolder is not null;
+
+    // ======== what the maker takes ========
+
+    private static readonly Socket[] AllSockets = Enum.GetValues<Socket>();
+
+    // by socket number: whether the maker takes it, and its version for that socket (asked once a frame, no allocation)
+    private readonly bool[] _makerTakes = new bool[256];
+    private readonly int[] _makerVersion = new int[256];
+    private long _makerFrame = -1;
+    private int _makerSig;
+    private bool _makerKnown;
+
+    /// <summary>
+    /// Asks the maker once a frame which kinds of part it takes and at which version (a maker that throws there takes
+    /// nothing). <see cref="_makerSig"/> moves whenever any of it changes.
+    /// </summary>
+    private void KnowMaker()
+    {
+        if (_makerKnown && _makerFrame == _frame)
+            return;
+        _makerKnown = true;
+        _makerFrame = _frame;
+        var maker = PhotoMaker;
+        var sig   = new HashCode();
+        sig.Add(maker is null ? 0 : RuntimeHelpers.GetHashCode(maker));
+        foreach (var socket in AllSockets)
+        {
+            bool takes;
+            int version;
+            try
+            {
+                takes   = socket != Socket.None && maker is not null && maker.Takes(socket);
+                version = takes ? maker!.VersionOf(socket) : 0;
+            }
+            catch
+            {
+                takes   = false;
+                version = 0;
+            }
+
+            _makerTakes[(byte)socket]   = takes;
+            _makerVersion[(byte)socket] = version;
+            sig.Add(takes);
+            sig.Add(version);
+        }
+
+        _makerSig = sig.ToHashCode();
+    }
+
+    /// <summary> Whether the maker draws parts of this socket (the closet asks for no others, counts no others). </summary>
+    private bool MakerTakes(Socket socket)
+    {
+        KnowMaker();
+        return _makerTakes[(byte)socket];
+    }
 
     public PhotoStatus? Photos
     {
@@ -293,8 +363,9 @@ public sealed partial class ClosetSession
             return;
 
         var face = _faceFrame == _frame;
+        KnowMaker();
         // the shelf's list by identity: a new order (or the first one, made after this on the very first frame) is a change
-        var key  = (_library.Version, _placeStamp, PhotoMaker!.Version, _data.PhotosOff, face, _selected, _orderStamp, RuntimeHelpers.GetHashCode(_ordered));
+        var key  = (_library.Version, _placeStamp, _makerSig, _data.PhotosOff, face, _selected, _orderStamp, RuntimeHelpers.GetHashCode(_ordered));
         if (_photoDone && !_askNew && key == _photoDoneFor)
         {
             if (!_rested)
@@ -425,12 +496,13 @@ public sealed partial class ClosetSession
         _photoWorkerTried = true;
         try
         {
-            var store = new PhotoStore(PhotoFolder!, PluginVersion, _log) { WriteFault = PhotoWriteFault, PruneFault = PhotoPruneFault, MoveFault = PhotoMoveFault };
-            _photoWorker = new PhotoWorker(PhotoMaker!, store, _log) { LoopFault = PhotoLoopFault };
+            var log   = PhotoLogOrSession;
+            var store = new PhotoStore(PhotoFolder!, PhotoPluginVersion, log) { WriteFault = PhotoWriteFault, PruneFault = PhotoPruneFault, MoveFault = PhotoMoveFault };
+            _photoWorker = new PhotoWorker(PhotoMaker!, store, log, PhotoGameFiles) { LoopFault = PhotoLoopFault };
         }
         catch (Exception ex)
         {
-            _log?.Invoke($"photos: the worker could not start ({ex.GetType().Name})");
+            PhotoLogOrSession?.Invoke($"photos: the worker could not start ({ex.GetType().Name})");
         }
 
         return _photoWorker;
@@ -444,6 +516,7 @@ public sealed partial class ClosetSession
             Socket    = part.Key.Socket,
             Race      = Race(),
             Width     = PhotoWidth,
+            Under     = UnderOf(part).Under,
         };
         _asks.Remove(part.Key);
         worker.Take(part.Key, part.KeyText, StampOf(part), ask);
@@ -559,10 +632,11 @@ public sealed partial class ClosetSession
     /// <summary> Everything else: one thing per part of every mod, walked a little each frame. </summary>
     private LibPart? NextAnywhere()
     {
-        if (_allThingsFor != _placeStamp)
+        KnowMaker();
+        if (_allThingsFor != (_placeStamp, _makerSig))
         {
-            _allThingsFor = _placeStamp;
-            _allThings    = OnePerThing(_byKey.Values.Where(p => MergesSlots(p.Key.Socket) && !_aside.ContainsKey(p.Key)).OrderBy(p => p.Key.Socket));
+            _allThingsFor = (_placeStamp, _makerSig);
+            _allThings    = OnePerThing(_byKey.Values.Where(p => MakerTakes(p.Key.Socket) && !_aside.ContainsKey(p.Key)).OrderBy(p => p.Key.Socket));
             _allWalk      = 0;
             _allClean     = 0;
         }
@@ -584,14 +658,14 @@ public sealed partial class ClosetSession
     }
 
     /// <summary>
-    /// The part of a thing to photograph, or null when it needs none: gear only (no hair, tails, faces for now), and only
-    /// when no slot of the thing has a picture, "nothing to show" or a failed take under the current stamp. The slot a
-    /// click would wear. No allocation for a thing of one slot.
+    /// The part of a thing to photograph, or null when it needs none: every kind the maker takes (gear, hair, faces, tails,
+    /// skin… as it says), and only when no slot of the thing has a picture, "nothing to show" or a failed take under the
+    /// current stamp. The slot a click would wear (things of several slots are gear only). No allocation.
     /// </summary>
     private LibPart? Wanted(LibPart part)
     {
         // only what is placed now (a shelf's list can still name a part the library just dropped)
-        if (!MergesSlots(part.Key.Socket) || part.Mod.Facts is not { Folder.Length: > 0 } || !_byKey.TryGetValue(part.Key, out var placed)
+        if (!MakerTakes(part.Key.Socket) || part.Mod.Facts is not { Folder.Length: > 0 } || !_byKey.TryGetValue(part.Key, out var placed)
          || !ReferenceEquals(placed, part))
             return null;
         if (_thingParts.TryGetValue(LeadOf(part.Key), out var thing) && thing.Count > 1)
@@ -608,16 +682,128 @@ public sealed partial class ClosetSession
     private bool Settled(LibPart part)
         => _photos.TryGetValue(part.Key, out var e) && e.Stamp == StampOf(part);
 
-    private readonly ConditionalWeakTable<LibMod, StrongBox<(int Version, string Stamp)>> _stamps = new();
+    private readonly ConditionalWeakTable<LibMod, StrongBox<(int Version, string Stamp)[]>> _stamps = new();
 
-    /// <summary> What decides a part's picture: the mod's fingerprint as the library has it, the maker's version, the width. </summary>
+    /// <summary>
+    /// What decides a part's picture: the mod's fingerprint as the library has it, the maker's version for the part's kind,
+    /// the width. (With the same version a stamp is the same as before kinds had versions of their own: the photos there
+    /// are kept.) Made once per mod and version.
+    /// </summary>
     private string StampOf(LibPart part)
     {
-        var version = PhotoMaker?.Version ?? 0;
-        var box = _stamps.GetValue(part.Mod, static _ => new StrongBox<(int, string)>((-1, string.Empty)));
-        if (box.Value.Item1 != version)
-            box.Value = (version, PhotoStore.Hash($"{part.Mod.Facts?.Stamp}|{version}|{PhotoWidth}")[..8]);
-        return box.Value.Item2;
+        KnowMaker();
+        // makeup on a sculpt of another mod: what it stands on is part of its picture
+        if (part.Key.Socket == Socket.FaceTextures && UnderOf(part) is { Under.Count: > 0 } under)
+            return under.Stamp;
+        return PlainStamp(part);
+    }
+
+    /// <summary> The stamp from the part's own mod alone (every part but makeup on another mod's sculpt): as in 0.5. </summary>
+    private string PlainStamp(LibPart part)
+    {
+        var version = _makerVersion[(byte)part.Key.Socket];
+        var box = _stamps.GetValue(part.Mod, static _ => new StrongBox<(int, string)[]>(Array.Empty<(int, string)>()));
+        var known = box.Value ?? [];
+        foreach (var (v, stamp) in known)
+            if (v == version)
+                return stamp;
+        var made = PhotoStore.Hash($"{part.Mod.Facts?.Stamp}|{version}|{PhotoWidth}")[..8];
+        box.Value = [..known, (version, made)];
+        return made;
+    }
+
+    // ======== what makeup stands on (PhotoAsk.Under) ========
+
+    /// <summary> The library's face sculpts (parts with a face model), made once per library version and placing. </summary>
+    private List<(LibPart Part, SculptMatch.Candidate Candidate)> _sculpts = new();
+    private (int Library, int Place) _sculptsFor = (-1, -1);
+
+    private readonly Dictionary<PartKey, UnderEntry> _underOf = new();
+
+    private sealed record UnderEntry(object Sculpts, HashSet<PartKey> On, LibMod Mod, int Version, IReadOnlyList<string> Under, string Stamp);
+
+    private static readonly IReadOnlyList<string> NoUnder = Array.Empty<string>();
+
+    /// <summary>
+    /// The sculpts a face-texture part (makeup, eyes, face paint) is photographed on, best first, at most three (see
+    /// <see cref="SculptMatch"/>), and the stamp that goes with them. Empty for every other part, for one whose own mod has a
+    /// sculpt (the maker finds it there), and when no sculpt of the library fits: the game's face. Made from what the
+    /// library keeps (names, authors, the file names per socket), never from a file; made again only when the library,
+    /// what is on or the maker's version changes.
+    /// </summary>
+    private (IReadOnlyList<string> Under, string Stamp) UnderOf(LibPart part)
+    {
+        if (part.Key.Socket != Socket.FaceTextures)
+            return (NoUnder, string.Empty);
+        KnowMaker();
+        var version = _makerVersion[(byte)part.Key.Socket];
+        var sculpts = Sculpts();
+        if (_underOf.TryGetValue(part.Key, out var known) && ReferenceEquals(known.Sculpts, sculpts) && ReferenceEquals(known.On, _on)
+         && ReferenceEquals(known.Mod, part.Mod) && known.Version == version)
+            return (known.Under, known.Stamp);
+
+        var under = NoUnder;
+        var own   = _byMod.TryGetValue(part.Key.Mod, out var parts) && parts.Any(p => p.Key.Socket == Socket.Face);
+        if (!own && sculpts.Count > 0 && part.Mod.Facts?.Files.TryGetValue(Socket.FaceTextures, out var names) == true)
+        {
+            var faces = SculptMatch.FacesNamed(names);
+            if (faces.Count > 0)
+            {
+                var keyOf = new Dictionary<SculptMatch.Candidate, PartKey>(ReferenceEqualityComparer.Instance);
+                var candidates = new List<SculptMatch.Candidate>();
+                foreach (var (p, c) in sculpts)
+                    if (!string.Equals(p.Key.Mod, part.Key.Mod, StringComparison.OrdinalIgnoreCase) && c.Faces.Any(faces.Contains))
+                    {
+                        candidates.Add(c);
+                        keyOf[c] = p.Key;
+                    }
+
+                if (candidates.Count > 0)
+                    under = SculptMatch.Rank(part.Mod.Name, part.Mod.Author, faces, candidates, c => _on.Contains(keyOf[c]));
+            }
+        }
+
+        var stamp = PlainStamp(part);
+        if (under.Count > 0)
+        {
+            // what the picture stands on: the first sculpt, by folder and fingerprint (a new first choice, or a change to
+            // it, takes the photo again). The others are only where the maker looks when the first lacks a file, so
+            // putting a sculpt on or off does not take again makeup whose first choice is another sculpt.
+            var first = under[0];
+            stamp = PhotoStore.Hash($"{part.Mod.Facts?.Stamp}|{version}|{PhotoWidth}|under|{first}={StampOfFolder(sculpts, first)}")[..8];
+        }
+
+        _underOf[part.Key] = new UnderEntry(sculpts, _on, part.Mod, version, under, stamp);
+        return (under, stamp);
+    }
+
+    private static string StampOfFolder(List<(LibPart Part, SculptMatch.Candidate Candidate)> sculpts, string folder)
+    {
+        foreach (var (p, c) in sculpts)
+            if (string.Equals(c.Folder, folder, StringComparison.Ordinal))
+                return p.Mod.Facts?.Stamp ?? string.Empty;
+        return string.Empty;
+    }
+
+    /// <summary> The library's face sculpts with the faces their models are for (from the file names the library keeps). </summary>
+    private List<(LibPart Part, SculptMatch.Candidate Candidate)> Sculpts()
+    {
+        if (_sculptsFor == (_library.Version, _placeStamp))
+            return _sculpts;
+        _sculptsFor = (_library.Version, _placeStamp);
+        var list = new List<(LibPart, SculptMatch.Candidate)>();
+        foreach (var p in _byKey.Values)
+        {
+            if (p.Key.Socket != Socket.Face || p.Mod.Facts is not { Folder.Length: > 0 } facts || !facts.Files.TryGetValue(Socket.Face, out var names))
+                continue;
+            var faces = SculptMatch.FacesNamed(names.Where(n => n.EndsWith(".mdl", StringComparison.Ordinal)));
+            if (faces.Count > 0)
+                list.Add((p, new SculptMatch.Candidate(facts.Folder, p.Mod.Name, p.Mod.Author, faces)));
+        }
+
+        _sculpts = list;
+        _underOf.Clear();
+        return _sculpts;
     }
 
     /// <summary>
@@ -631,9 +817,11 @@ public sealed partial class ClosetSession
             return;
         _prunedFor = _library.Version;
         _prunedAt  = now;
+        // every part that is there, of every kind: only a part that is gone loses its photo (a maker that took nothing,
+        // or threw when asked what it takes, must not sweep the folder clean)
         var live = new HashSet<string>(StringComparer.Ordinal);
         foreach (var part in _library.Parts)
-            if (MergesSlots(part.Key.Socket))
+            if (part.Key.Socket != Socket.None)
                 live.Add(part.KeyText);
         foreach (var key in _photos.Keys.Where(k => !live.Contains(k.ToString())).ToList())
             _photos.Remove(key);
@@ -644,14 +832,48 @@ public sealed partial class ClosetSession
     private void CountPhotos()
     {
         var now = _now();
-        if (!_photoCountDirty && _photoCountPlace == _placeStamp || now - _photoCountAt < PhotoCountEvery && _photoCountPlace >= 0)
+        KnowMaker();
+        if (!_photoCountDirty && _photoCountPlace == (_placeStamp, _makerSig) || now - _photoCountAt < PhotoCountEvery && _photoCountPlace.Place >= 0)
             return;
         _photoCountDirty = false;
-        _photoCountPlace = _placeStamp;
+        _photoCountPlace = (_placeStamp, _makerSig);
         _photoCountAt    = now;
-        var things = OnePerThing(_byKey.Values.Where(p => MergesSlots(p.Key.Socket) && !_aside.ContainsKey(p.Key)).OrderBy(p => p.Key.Socket));
-        var taken  = things.Count(p => FileOfThing(p) is not null);
-        _photoCount = (taken, things.Count);
+        var things = OnePerThing(_byKey.Values.Where(p => MakerTakes(p.Key.Socket) && !_aside.ContainsKey(p.Key)).OrderBy(p => p.Key.Socket));
+        int taken = 0, total = 0;
+        foreach (var thing in things)
+        {
+            if (FileOfThing(thing) is not null)
+            {
+                taken++;
+                total++;
+            }
+            else if (!SettledWithout(thing))
+            {
+                total++;
+            }
+        }
+
+        _photoCount = (taken, total);
+    }
+
+    /// <summary>
+    /// A thing that has its answer under the current stamp and it is no photo: nothing to show, a problem (an animation
+    /// mod's "nothing to draw" among them), or a photo that could not be kept this session. It is not a piece that could
+    /// have a photo, so the settings sheet's total leaves it out and reaches its end when the work is done.
+    /// </summary>
+    private bool SettledWithout(LibPart part)
+    {
+        if (_photos.Count == 0)
+            return false;
+        if (_thingParts.TryGetValue(LeadOf(part.Key), out var thing))
+        {
+            foreach (var p in thing)
+                if (Settled(p))
+                    return true;
+            return false;
+        }
+
+        return Settled(part);
     }
 
     private void StopPhotos()
@@ -683,6 +905,10 @@ public sealed partial class ClosetSession
         private int _nothing;
         private int _failed;
         private readonly Dictionary<string, int> _kinds = new(StringComparer.Ordinal);
+
+        // the game's files: counted since the plugin started, so the stretch's share is the difference to the last summary
+        private readonly IGameFileCounts? _game;
+        private (long Read, long Missing, long Failed) _gameBefore;
 
         /// <summary> While working, the index is saved every this many photos, or after this long, whichever comes first. </summary>
         private const int SaveEvery = 50;
@@ -716,11 +942,13 @@ public sealed partial class ClosetSession
 
         public readonly ConcurrentQueue<List<(PartKey Key, PhotoStore.Entry Entry)>> Results = new();
 
-        public PhotoWorker(IPhotoMaker maker, PhotoStore store, Action<string>? log)
+        public PhotoWorker(IPhotoMaker maker, PhotoStore store, Action<string>? log, IGameFileCounts? game = null)
         {
             _maker  = maker;
             _store  = store;
             _log    = log;
+            _game   = game;
+            _gameBefore = GameCounts();
             _thread = new Thread(Run) { IsBackground = true, Priority = ThreadPriority.BelowNormal, Name = "ModCloset2 photos" };
             _thread.Start();
         }
@@ -919,6 +1147,7 @@ public sealed partial class ClosetSession
                             _log?.Invoke($"photos: the photo folder cannot be written ({ex.GetType().Name}); no more photos this session");
                             _taken = _nothing = _failed = 0;
                             _kinds.Clear();
+                            _gameBefore = GameCounts();
                             _maker.Rest();
                         }
                     }
@@ -959,12 +1188,28 @@ public sealed partial class ClosetSession
         /// </summary>
         private void Summary()
         {
+            var game = GameCounts();
+            var read = (game.Read - _gameBefore.Read, game.Missing - _gameBefore.Missing, game.Failed - _gameBefore.Failed);
+            _gameBefore = game;
             if (_taken + _nothing + _failed == 0)
                 return;
-            _log?.Invoke(SummaryLine(_taken, _nothing, _failed, _kinds, _working.Elapsed));
+            _log?.Invoke(SummaryLine(_taken, _nothing, _failed, _kinds, _working.Elapsed, read));
             _taken = _nothing = _failed = 0;
             _kinds.Clear();
             _working.Reset();
+        }
+
+        /// <summary> The game files' counts so far; nothing when there are none or they cannot be had. </summary>
+        private (long Read, long Missing, long Failed) GameCounts()
+        {
+            try
+            {
+                return _game?.GameFileCounts ?? default;
+            }
+            catch
+            {
+                return default;
+            }
         }
 
         /// <summary> Unload: stops the worker (the maker honours the stop between its passes) and waits for it a moment. </summary>
@@ -977,8 +1222,12 @@ public sealed partial class ClosetSession
         }
     }
 
-    /// <summary> The worker's summary line (no names: kinds are the maker's fixed sentences, already made safe). </summary>
-    internal static string SummaryLine(int taken, int nothing, int failed, IReadOnlyDictionary<string, int> kinds, TimeSpan worked)
+    /// <summary>
+    /// The worker's summary line (no names: kinds are the maker's fixed sentences, already made safe). When the maker read
+    /// the game's own files in that stretch, how many, how many the game did not have, and how many could not be read.
+    /// </summary>
+    internal static string SummaryLine(int taken, int nothing, int failed, IReadOnlyDictionary<string, int> kinds, TimeSpan worked,
+        (long Read, long Missing, long Failed) game = default)
     {
         var line = $"photos: {taken} taken, {nothing} with nothing to show, {failed} could not be drawn";
         if (failed > 0 && kinds.Count > 0)
@@ -992,6 +1241,14 @@ public sealed partial class ClosetSession
             line += $" ({string.Join(", ", parts)})";
         }
 
-        return line + $", {worked.TotalSeconds:F0} s";
+        line += $", {worked.TotalSeconds:F0} s";
+        if (game.Read + game.Missing + game.Failed > 0)
+        {
+            line += $", {game.Read} game files read, {game.Missing} not there";
+            if (game.Failed > 0)
+                line += $", {game.Failed} could not be read";
+        }
+
+        return line;
     }
 }

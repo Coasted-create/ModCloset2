@@ -27,6 +27,15 @@ public sealed class PhotoAsk
     /// </summary>
     public int Race { get; init; }
 
+    /// <summary>
+    /// Other mods of the user's library whose files the picture may stand on, best first (full folder paths): what a
+    /// part needs and its own mod does not bring is looked for in these, with their default options, before the game's
+    /// own files. The closet fills it for makeup and other face textures with the face sculpt they belong to (the one
+    /// whose name goes with the mod's, then the sculpts that are on), because paint made for a sculpt sits wrong on the
+    /// game's plain face. Empty for everything else.
+    /// </summary>
+    public IReadOnlyList<string> Under { get; init; } = Array.Empty<string>();
+
     /// <summary> Width in pixels. The picture is 4:5, the shape of a card's picture. </summary>
     public int Width { get; init; } = 384;
 }
@@ -66,10 +75,39 @@ public interface IPhotoMaker
 {
     /// <summary> Goes up whenever pictures would come out different. Pictures taken under another number are taken again. </summary>
     int Version { get; }
+
+    /// <summary>
+    /// The same per kind of part, so that better hair pictures do not make every piece of clothing be taken again.
+    /// The closet's stamp of a photo uses this number.
+    /// </summary>
+    int VersionOf(Socket socket)
+        => Version;
+
+    /// <summary> Whether this maker draws parts of this socket at all (the closet asks for no others). </summary>
+    bool Takes(Socket socket)
+        => socket is >= Socket.Head and <= Socket.Rings;
     PhotoShot Take(PhotoAsk ask, CancellationToken stop);
 
     /// <summary> Nothing more to draw for now: lets the working memory go. </summary>
     void Rest();
+}
+
+/// <summary>
+/// The game's own files, for what a mod does not bring: the plain head under a hairstyle, the face a makeup mod paints
+/// on, the model a recolour of a game item belongs to (docs/briefs/13-photos-of-everything.md). Always the game's
+/// unmodded file, never what Penumbra would put in its place. Reading only; the files stay where they are.
+/// </summary>
+public interface IGameFiles
+{
+    /// <summary>
+    /// The whole file at this game path ("chara/human/c0801/obj/face/f0001/model/c0801f0001_fac.mdl") in the same layout
+    /// a mod ships it in, or null when the game has none or it cannot be read. May be called from any thread, one call
+    /// at a time; it reads from the disk, so never on the frame. Never throws.
+    /// </summary>
+    byte[]? Read(string gamePath);
+
+    /// <summary> Whether the game has a file at this path (cheap: no file is read). Never throws. </summary>
+    bool Has(string gamePath);
 }
 
 /// <summary> How far the closet is with its photos, for the settings sheet. </summary>

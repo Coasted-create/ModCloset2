@@ -104,7 +104,7 @@ public sealed partial class WindowFace
         Painter.TextIn(_c, new Rect(x + lw + P(8), top, right - x - lw - P(8), lh), wearing.Name, BodyBoldSlim, Theme.Text);
         var y = top + lh + P(6);
         if (hasBar)
-            LiveBar(live!, new Rect(x, y, right - x, P(12)), P(6), Theme.Rail);
+            LiveBar(live!, new Rect(x, y, right - x, P(12)), P(6), Theme.Rail, wholeButton: true);
         else if (chips.Count > 0)
             ChipRow(new Rect(x, y, right - x, P(24)), wearing, chips);
     }

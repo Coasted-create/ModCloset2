@@ -11,8 +11,11 @@ namespace ModCloset2.Colours;
 /// </summary>
 public static class Recolour
 {
-    /// <summary> How much a row's lightness step may grow when the new colour leaves more room than the old one. </summary>
-    public const float MaxStretch = 2f;
+    /// <summary>
+    /// How much a row's lightness step may grow when the new colour leaves more room than the old one. 1: never grows (a
+    /// near-black speck in a dark grey part, made white, stays a light grey instead of turning mid grey: build 0.5 had 2).
+    /// </summary>
+    public const float MaxStretch = 1f;
 
     /// <summary> Metal keeps this much of its own lightness. </summary>
     public const float MetalOwnLight = 0.5f;

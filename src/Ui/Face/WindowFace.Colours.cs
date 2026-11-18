@@ -24,10 +24,47 @@ public sealed partial class WindowFace
     /// <summary> What the picker is open on: an area of a bar, or (with <see cref="Bar"/> null) an outfit colour. </summary>
     private sealed record PickTarget(string? Bar, int Area, ColourRole Role, Rect Anchor);
 
+    /// <summary> A picker's area for the whole piece: every area at once (<see cref="IOutfitColours.SetPiece"/>). </summary>
+    public const int WholePiece = -1;
+
     // the picker's colour while it is open (kept as hue / saturation / value, so the hue survives black and white)
     private float _pickH, _pickS, _pickV;
     private int  _pickDrag; // 0 none, 1 the field, 2 the hue strip
     private uint _pickSent;
+
+    /// <summary> What the drag in progress colours (sent with done: false so far), until it is finished. </summary>
+    private PickTarget? _dragTarget;
+
+    /// <summary>
+    /// A drag in the picker that has not been finished (the picker closed by any path before the mouse was let go: its
+    /// area went away, Esc, the window closed, another picker opened): its last value goes once more with done: true,
+    /// when what it colours is still there, so the colour engine closes the undo step.
+    /// </summary>
+    private void FinishColourDrag()
+    {
+        if (_pickDrag == 0)
+            return;
+        var t = _dragTarget;
+        _pickDrag   = 0;
+        _dragTarget = null;
+        if (t is null || _s?.Colours is not { } oc)
+            return;
+        var there = t.Bar is null
+            || (t.Area == WholePiece ? oc.Pieces.Any(p => p.Id == t.Bar) : AreaOf(oc, t.Bar, t.Area) is not null);
+        if (there)
+            SendPick(oc, t, true);
+    }
+
+    /// <summary> The host's window is closing: a drag in the picker that is still open is finished now. </summary>
+    public void WindowClosing()
+        => FinishColourDrag();
+
+    /// <summary> Once per frame, after drawing: a drag whose picker is no longer open is finished. </summary>
+    private void FinishLostDrag()
+    {
+        if (_pickDrag != 0 && !(_ui.IsOpen(PopPicker) && ReferenceEquals(_ui.PopupContext, _dragTarget)))
+            FinishColourDrag();
+    }
 
     // pointing at a segment: Point every frame, PointNothing once when it stops
     private bool _pointedNow;
@@ -389,6 +426,10 @@ public sealed partial class WindowFace
         var lh    = _c.LineHeight(Theme.Label);
         var bh    = _c.LineHeight(Theme.BodyBold);
         var ty    = tile.Center.Y - (lh + P(1) + bh) / 2;
+
+        // the picture and the name: the whole piece in one colour, as a dye would do it
+        var whole = new Rect(tile.X - P(4), tile.Y - P(4), textX + nameW - tile.X + P(8), tile.H + P(8));
+        WholePieceTarget(piece, "piece/" + piece.Id, whole, P(10));
         Painter.TextIn(_c, new Rect(textX, ty, nameW, lh), piece.PieceName, Theme.Label, Theme.Muted);
         Painter.TextIn(_c, new Rect(textX, ty + lh + P(1), nameW, bh), piece.Name, Theme.BodyBold, Theme.Text);
 
@@ -418,8 +459,49 @@ public sealed partial class WindowFace
     /// rounded ends, a pin on areas coloured by hand, painted areas hatched and not clickable, a quiet placeholder while
     /// the piece is read. Pointing at a segment lights the area up on the character; a click opens the picker.
     /// </summary>
-    private void LiveBar(PieceColours piece, Rect r, float radius, Colr behind)
+    /// <summary>
+    /// A place that opens the picker for the whole piece (the row's picture and name; the small button at the strip's
+    /// bar): hover wash, its tooltip, the accent edge while that picker is open.
+    /// </summary>
+    private void WholePieceTarget(PieceColours piece, string id, Rect r, float radius)
     {
+        Stats.Places[id] = r;
+        var usable = !piece.Reading && piece.Areas.Any(a => !a.Painted);
+        var resp   = _ui.Interact(id, r, usable);
+        var open   = _ui.IsOpen(PopPicker) && _ui.PopupContext is PickTarget { Area: WholePiece } t && t.Bar == piece.Id;
+        if (open)
+            _c.StrokeRect(r, Theme.Accent, radius, P(1.5f));
+        else if (resp.Hovered && usable)
+            _c.FillRect(r, Theme.HoverWash, radius);
+        if (usable)
+            _ui.Tip(id, r, Loc.T("Colour the whole piece"));
+        if (resp.Clicked && usable)
+            OpenPicker(new PickTarget(piece.Id, WholePiece, CommonRole(piece) ?? ColourRole.Own, r), MainRgb(piece));
+    }
+
+    /// <summary> The colour of the piece's largest area that can be coloured (where the whole-piece picker starts). </summary>
+    private static uint MainRgb(PieceColours piece)
+        => piece.Areas.Where(a => !a.Painted).OrderByDescending(a => a.Share).Select(a => a.Rgb).FirstOrDefault();
+
+    /// <summary> What every colourable area of the piece follows, when they all follow the same; else null. </summary>
+    public static ColourRole? CommonRole(PieceColours piece)
+    {
+        var roles = piece.Areas.Where(a => !a.Painted).Select(a => a.Pinned ? ColourRole.Own : a.Follows).Distinct().ToList();
+        return roles.Count == 1 ? roles[0] : null;
+    }
+
+    private void LiveBar(PieceColours piece, Rect r, float radius, Colr behind, bool wholeButton = false)
+    {
+        // on the strip: a small button at the bar's end colours the whole piece
+        if (wholeButton && !piece.Reading && piece.Areas.Count > 0)
+        {
+            var size = Math.Max(P(22), r.H + P(6));
+            var btn  = new Rect(r.Right - size, r.Center.Y - size / 2, size, size);
+            r = r with { W = Math.Max(P(12), r.W - size - P(6)) };
+            WholePieceTarget(piece, "whole/" + piece.Id, btn, P(7));
+            Painter.Icon(_c, Icons.Palette, btn.Center, P(14), Theme.Muted, 1.7f);
+        }
+
         Stats.Places["bar/" + piece.Id] = r;
         if (piece.Reading || piece.Areas.Count == 0)
         {
@@ -468,7 +550,9 @@ public sealed partial class WindowFace
                 // lights the area up on the character; the colours engine needs this every frame while pointed at
                 _s.Colours?.Point(piece.Id, area.Index);
                 _pointedNow = true;
-                _ui.Tip(id, seg, area.Pinned ? Loc.F("{0} · coloured by hand", area.Label) : area.Label);
+                // what it is, and what the engine says about it (its share; a note when it is dormant or coloured elsewhere)
+                var what = area.Pinned ? Loc.F("{0} · coloured by hand", area.Label) : area.Label;
+                _ui.Tip(id, seg, area.ShareText.Length > 0 ? Loc.F("{0} · {1}", what, area.ShareText) : what);
             }
 
             if (resp.Clicked)
@@ -506,6 +590,8 @@ public sealed partial class WindowFace
 
     private void OpenPicker(PickTarget target, uint rgb)
     {
+        // another picker opening while a drag is open (it should not happen, but the undo step must close)
+        FinishColourDrag();
         (_pickH, _pickS, _pickV) = ColourMath.ToHsv(rgb);
         _pickDrag = 0;
         _pickSent = rgb;
@@ -528,16 +614,21 @@ public sealed partial class WindowFace
         _pickSent = rgb;
         if (t.Bar is null)
             oc.SetPalette(t.Role, rgb, done);
+        else if (t.Area == WholePiece)
+            oc.SetPiece(t.Bar, rgb, done);
         else
             oc.SetArea(t.Bar, t.Area, rgb, done);
     }
 
     private void Picker(IOutfitColours oc, PickTarget t)
     {
-        var area = t.Bar is null ? null : AreaOf(oc, t.Bar, t.Area);
-        if (t.Bar is not null && area is null)
+        var wholePiece = t.Bar is not null && t.Area == WholePiece;
+        var piece      = wholePiece ? oc.Pieces.FirstOrDefault(p => p.Id == t.Bar) : null;
+        var area       = t.Bar is null || wholePiece ? null : AreaOf(oc, t.Bar, t.Area);
+        if (t.Bar is not null && area is null && piece is null)
         {
-            // the piece came off while the picker was open
+            // the piece came off, or its areas changed, while the picker was open (a drag on it ends: its target is gone)
+            FinishColourDrag();
             _ui.ClosePopup();
             return;
         }
@@ -545,21 +636,27 @@ public sealed partial class WindowFace
         var u     = _u;
         var w     = P(264);
         var inner = w - P(28);
-        var title = area?.Label ?? Loc.F("{0} colour", RoleName(t.Role));
-        var note  = area?.ShareText ?? Loc.T("everything that follows it");
-        var foot  = area is null ? Loc.T("Everything that follows this colour changes with it.") : Loc.T("This area is lit up on your character while you point at it.");
+        var title = wholePiece ? Loc.T("The whole piece") : area?.Label ?? Loc.F("{0} colour", RoleName(t.Role));
+        var note  = wholePiece ? string.Empty : area?.ShareText ?? Loc.T("everything that follows it");
+        var foot  = wholePiece ? Loc.T("Every part of it takes this colour, as a dye would.")
+            : area is null ? Loc.T("Everything that follows this colour changes with it.") : Loc.T("This area is lit up on your character while you point at it.");
         var follows = new List<ColourRole>();
-        if (area is not null)
+        if (area is not null || piece is not null)
         {
             follows.AddRange(new[] { ColourRole.Main, ColourRole.Second, ColourRole.Accent });
-            if (area.Metal || area.Follows == ColourRole.Metal)
+            if (area is not null ? area.Metal || area.Follows == ColourRole.Metal : piece!.Areas.Any(a => a.Metal))
                 follows.Add(ColourRole.Metal);
             follows.Add(ColourRole.Own);
         }
 
+        // what the area is, on the right of the title; a long note (dormant, coloured elsewhere) gets its own lines
+        var noteW     = _c.Measure(note, Theme.Small).X;
+        var noteLong  = noteW > inner * 0.55f;
+        var noteLines = noteLong ? Painter.Wrap(_c, note, inner, Theme.Small, 4) : new List<string>();
+        var noteH     = noteLines.Count * _c.LineHeight(Theme.Small) + (noteLines.Count > 0 ? P(8) : 0);
         var footLines = Painter.Wrap(_c, foot, inner, Theme.Small, 3);
         var gridRows  = (follows.Count + 1) / 2;
-        var h = P(14) + P(20) + P(10) + P(120) + P(10) + P(12) + P(10)
+        var h = P(14) + P(20) + P(10) + noteH + P(120) + P(10) + P(12) + P(10)
               + (follows.Count > 0 ? P(14) + P(10) + gridRows * P(32) + (gridRows - 1) * P(6) + P(10) : 0)
               + footLines.Count * _c.LineHeight(Theme.Small) + P(14);
 
@@ -586,10 +683,19 @@ public sealed partial class WindowFace
 
         var cx = box.X + P(14);
         var cy = box.Y + P(14);
-        var nw = _c.Measure(note, Theme.Small).X;
-        Painter.TextIn(_c, new Rect(cx, cy, inner - Math.Min(nw, inner * 0.55f) - P(8), P(20)), title, Theme.BodyBold, Theme.Text);
-        Painter.TextIn(_c, new Rect(box.Right - P(14) - Math.Min(nw, inner * 0.55f), cy, Math.Min(nw, inner * 0.55f), P(20)), note, Theme.Small, Theme.Muted, 1);
+        var nw = noteLong ? 0 : noteW;
+        Painter.TextIn(_c, new Rect(cx, cy, inner - (nw > 0 ? Math.Min(nw, inner * 0.55f) + P(8) : 0), P(20)), title, Theme.BodyBold, Theme.Text);
+        if (nw > 0)
+            Painter.TextIn(_c, new Rect(box.Right - P(14) - nw, cy, nw, P(20)), note, Theme.Small, Theme.Muted, 1);
         cy += P(20 + 10);
+        foreach (var l in noteLines)
+        {
+            Painter.TextIn(_c, new Rect(cx, cy, inner, _c.LineHeight(Theme.Small)), l, Theme.Small, Theme.Gold);
+            cy += _c.LineHeight(Theme.Small);
+        }
+
+        if (noteLines.Count > 0)
+            cy += P(8);
 
         // the field: saturation across, brightness down
         var field = new Rect(cx, cy, inner, P(120));
@@ -624,9 +730,9 @@ public sealed partial class WindowFace
 
         // dragging: many changes while moving, one "done" on release; the popup stays open meanwhile
         if (fresp.Pressed)
-            _pickDrag = 1;
+            (_pickDrag, _dragTarget) = (1, t);
         else if (hresp.Pressed)
-            _pickDrag = 2;
+            (_pickDrag, _dragTarget) = (2, t);
         if (_pickDrag != 0)
         {
             var m = _ui.Mouse;
@@ -641,14 +747,16 @@ public sealed partial class WindowFace
             if (_ui.In.Released[0] || !_ui.In.Down[0])
             {
                 SendPick(oc, t, true);
-                _pickDrag = 0;
+                _pickDrag   = 0;
+                _dragTarget = null;
             }
             else
                 SendPick(oc, t, false);
         }
 
-        if (follows.Count > 0 && area is not null)
+        if (follows.Count > 0 && (area is not null || piece is not null))
         {
+            var current = area is not null ? area.Follows : CommonRole(piece!);
             Painter.TextIn(_c, new Rect(cx, cy, inner, P(14)), Loc.T("Follows"), Theme.Label, Theme.Muted);
             cy += P(14 + 10);
             var bw = (inner - P(6)) / 2;
@@ -659,7 +767,7 @@ public sealed partial class WindowFace
                 var id     = "follow/" + role;
                 Stats.Places[id] = btn;
                 var resp   = _ui.Interact(id, btn);
-                var chosen = area.Follows == role;
+                var chosen = current == role;
                 _c.FillRect(btn, chosen ? Theme.Accent.Fade(0.1f) : resp.Hovered ? Theme.Picked : Colr.Transparent, P(8));
                 _c.StrokeRect(btn, chosen ? Theme.Accent : Theme.EdgeStrong, P(8), Math.Max(1, u));
                 if (role == ColourRole.Own)
@@ -668,7 +776,14 @@ public sealed partial class WindowFace
                     Dot(new Vector2(btn.X + P(16), btn.Center.Y), P(6), oc.Palette.Of(role));
                 Painter.TextIn(_c, new Rect(btn.X + P(30), btn.Y, btn.W - P(36), btn.H), RoleName(role), Theme.Caption, Theme.Text);
                 if (resp.Clicked && !chosen && t.Bar is not null)
-                    oc.Follow(t.Bar, t.Area, role);
+                {
+                    if (!wholePiece)
+                        oc.Follow(t.Bar, t.Area, role);
+                    else if (role == ColourRole.Own)
+                        oc.ResetPiece(t.Bar);
+                    else
+                        oc.FollowPiece(t.Bar, role);
+                }
             }
 
             cy += gridRows * P(38) - P(6) + P(10);

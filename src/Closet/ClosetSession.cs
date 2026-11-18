@@ -11,7 +11,11 @@ public interface ITryColours
     void TryOn(string snapshot);
 
     /// <summary> Ends the colour try: kept (the before/after pair for the Keep's undo step) or dropped (as before; null). </summary>
-    (string Before, string After)? EndTry(bool keep);
+    /// <param name="byUser">
+    /// The user ended it (Put back, Keep, another try, Undo). False when the session ends it on its own (the wardrobe
+    /// stopped previewing): then nothing is taken over from what was coloured outside the closet.
+    /// </param>
+    (string Before, string After)? EndTry(bool keep, bool byUser = true);
 
     /// <summary> Puts colours back as a snapshot says (the undo of a Keep that kept colours). </summary>
     void Restore(string snapshot);
@@ -153,7 +157,8 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         if (_tries.Count > 0 && _moving is null && !_wardrobe.Previewing && !_wardrobe.Busy && !_tryPending)
         {
             _tries.Clear();
-            EndColourTry(false);
+            // the try ended without the user (the wardrobe stopped previewing): not their doing
+            EndColourTry(false, byUser: false);
             _viewDirty = true;
         }
 
@@ -2536,15 +2541,19 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         Changed();
     }
 
-    /// <summary> Ends a colour try: kept (the pair for the undo step) or dropped (as before). Null when none was on. </summary>
-    private (string Before, string After)? EndColourTry(bool keep)
+    /// <summary>
+    /// Ends a colour try: kept (the pair for the undo step) or dropped (as before). Null when none was on. Every caller is
+    /// a user's act (Put back, Keep, trying a look, Undo) but the one in the frame that finds the wardrobe no longer
+    /// previewing, which passes <paramref name="byUser"/> false.
+    /// </summary>
+    private (string Before, string After)? EndColourTry(bool keep, bool byUser = true)
     {
         if (!_colourTrying)
             return null;
         _colourTrying = false;
         try
         {
-            return ColourTry?.EndTry(keep);
+            return ColourTry?.EndTry(keep, byUser);
         }
         catch (Exception ex)
         {

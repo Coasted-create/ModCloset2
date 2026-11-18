@@ -42,8 +42,17 @@ public sealed class RowInfo
     /// <summary> The row's 32 table values (colours squared, as the game keeps them). </summary>
     public float[] Values { get; init; } = new float[MaterialFile.HalvesPerRow];
 
-    /// <summary> Surface the row covers, in model units squared (all slots together). </summary>
+    /// <summary>
+    /// Surface the row covers, in model units squared (all slots together). Where the index map blends the two rows of a
+    /// pair (green between 0 and 255), each row counts for its part of the blend, as the shader mixes them.
+    /// </summary>
     public double Weight { get; set; }
+
+    /// <summary>
+    /// Surface where this row and the other row of its pair are mixed by the index map (a gradient between the two). Rows
+    /// mixed over much of their surface look like one part of the piece and are grouped into one area.
+    /// </summary>
+    public double Blended { get; set; }
     public int DyeChannel { get; init; } = -1;
 
     /// <summary> The diffuse colour on screen. </summary>
@@ -185,11 +194,12 @@ public static class PieceReader
                 }
 
                 var weights = new double[MaterialFile.Rows];
+                var blended = new double[MaterialFile.Rows / 2];
                 if (meshes is null)
-                    Histogram(image, legacy, weights);
+                    Histogram(image, legacy, weights, blended);
                 else
                     foreach (var mesh in meshes)
-                        Measure(mesh, image, legacy, weights);
+                        Measure(mesh, image, legacy, weights, blended);
 
                 var file = Name(live.Path);
                 for (var r = 0; r < MaterialFile.Rows; ++r)
@@ -201,7 +211,8 @@ public static class PieceReader
                         rows[id] = info = new RowInfo { Id = id, Material = j, Row = r, Values = mtrl.RowValues[r], DyeChannel = mtrl.DyeChannels[r] };
                     if (!info.Slots.Contains(model.Slot))
                         info.Slots.Add(model.Slot);
-                    info.Weight += weights[r];
+                    info.Weight  += weights[r];
+                    info.Blended += blended[r / 2];
                 }
             }
         }
@@ -239,6 +250,54 @@ public static class PieceReader
         return pair * 2 + (image.Rgba[p + 1] >= 128 ? 0 : 1);
     }
 
+    /// <summary> Green within this far of 0 or 255 is a pure row (block compression leaves a little noise). </summary>
+    public const int BlendNoise = 8;
+
+    /// <summary>
+    /// The rows a texel shows and how much of each: the pair's row A with weight <c>a</c>, row B with <c>1 - a</c>
+    /// (green is the weight of row A, as the shader mixes them). Legacy materials pick one row by the normal map's alpha
+    /// (<c>a</c> = 1).
+    /// </summary>
+    public static (int A, float WeightA) Mix(TexImage image, int x, int y, bool legacy)
+    {
+        var p = image.At(x, y);
+        if (legacy)
+            return (Math.Clamp((int)MathF.Round(image.Rgba[p + 3] / 17f), 0, 15), 1f);
+        var pair  = Math.Clamp((int)MathF.Round(image.Rgba[p] / 17f), 0, 15);
+        int green = image.Rgba[p + 1];
+        var a     = green >= 255 - BlendNoise ? 1f : green <= BlendNoise ? 0f : green / 255f;
+        return (pair * 2, a);
+    }
+
+    /// <summary> Adds one texel to the rows it shows (and, when it mixes the pair, to the pair's blended surface). </summary>
+    private static void Add(TexImage image, int x, int y, bool legacy, double weight, double[] rows, double[]? blended, List<int>? touched = null)
+    {
+        var (a, wa) = Mix(image, x, y, legacy);
+        if (legacy || wa >= 1f)
+        {
+            Touch(a, weight);
+            return;
+        }
+
+        if (wa <= 0f)
+        {
+            Touch(a + 1, weight);
+            return;
+        }
+
+        Touch(a, weight * wa);
+        Touch(a + 1, weight * (1 - wa));
+        if (blended is not null)
+            blended[a / 2] += weight * 2 * Math.Min(wa, 1 - wa);
+
+        void Touch(int row, double w)
+        {
+            if (rows[row] == 0)
+                touched?.Add(row);
+            rows[row] += w;
+        }
+    }
+
     /// <summary> Surface of a mesh's shown triangles. </summary>
     public static double Surface(UvMesh mesh)
     {
@@ -258,15 +317,19 @@ public static class PieceReader
     }
 
     /// <summary> Every texel counts once (no model to say which ones the piece uses). </summary>
-    private static void Histogram(TexImage image, bool legacy, double[] weights)
+    private static void Histogram(TexImage image, bool legacy, double[] weights, double[]? blended = null)
     {
-        var counts = new long[MaterialFile.Rows];
+        var counts = new double[MaterialFile.Rows];
+        var mixed  = new double[MaterialFile.Rows / 2];
         for (var y = 0; y < image.Height; ++y)
         for (var x = 0; x < image.Width; ++x)
-            counts[RowAt(image, x, y, legacy)]++;
-        var total = Math.Max(1, counts.Sum());
+            Add(image, x, y, legacy, 1, counts, mixed);
+        var total = Math.Max(1, (double)image.Width * image.Height);
         for (var r = 0; r < counts.Length; ++r)
-            weights[r] += counts[r] / (double)total;
+            weights[r] += counts[r] / total;
+        if (blended is not null)
+            for (var k = 0; k < mixed.Length; ++k)
+                blended[k] += mixed[k] / total;
     }
 
     /// <summary> Maps larger than this per side are sampled every second (or fourth) texel: exact texel values, a quarter of the work. </summary>
@@ -277,28 +340,31 @@ public static class PieceReader
         public TexImage Image;
         public bool Legacy;
         public int Step;
-        public int[] Counts;
+        public double[] Counts;
+        public double[] Blended;
         public List<int> Touched;
 
         public void Visit(int x, int y)
-        {
-            var row = RowAt(Image, Math.Min(Image.Width - 1, x * Step + Step / 2), Math.Min(Image.Height - 1, y * Step + Step / 2), Legacy);
-            if (Counts[row]++ == 0)
-                Touched.Add(row);
-        }
+            => Add(Image, Math.Min(Image.Width - 1, x * Step + Step / 2), Math.Min(Image.Height - 1, y * Step + Step / 2), Legacy, 1, Counts, Blended, Touched);
     }
 
     /// <summary>
-    /// Adds each triangle's surface to the rows of the texels inside its texture-coordinate triangle, shared by how many
-    /// texels each row has there. A triangle too small to hold a texel centre counts for the texel under its middle.
+    /// Adds each triangle's surface to the rows of the texels inside its texture-coordinate triangle, shared by how much
+    /// each row shows there (a texel that mixes a pair counts for both rows by the mix). A triangle too small to hold a
+    /// texel centre counts for the texel under its middle. <paramref name="blended"/> (16 entries, one per row pair)
+    /// gets the surface where a pair is mixed.
     /// </summary>
-    public static void Measure(UvMesh mesh, TexImage image, bool legacy, double[] weights)
+    public static void Measure(UvMesh mesh, TexImage image, bool legacy, double[] weights, double[]? blended = null)
     {
         var step = 1;
         while (Math.Max(image.Width, image.Height) / step > MaxSamples)
             step *= 2;
         int gw = Math.Max(1, image.Width / step), gh = Math.Max(1, image.Height / step);
-        var counter = new RowCounter { Image = image, Legacy = legacy, Step = step, Counts = new int[MaterialFile.Rows], Touched = new List<int>(4) };
+        var counter = new RowCounter
+        {
+            Image = image, Legacy = legacy, Step = step, Counts = new double[MaterialFile.Rows], Blended = new double[MaterialFile.Rows / 2],
+            Touched = new List<int>(4),
+        };
         for (var t = 0; t + 2 < mesh.Indices.Length; t += 3)
         {
             int a = mesh.Indices[t], b = mesh.Indices[t + 1], c = mesh.Indices[t + 2];
@@ -308,7 +374,7 @@ public static class PieceReader
             if (!mesh.HasUvs)
             {
                 // no texture coordinates: the texel at 0, 0 (rare; such a mesh has one look)
-                weights[RowAt(image, 0, 0, legacy)] += surface;
+                Add(image, 0, 0, legacy, surface, weights, blended);
                 continue;
             }
 
@@ -319,7 +385,7 @@ public static class PieceReader
             if (inside == 0)
             {
                 var (x, y) = Texel(image.Width, image.Height, (u0 + u1 + u2) / 3, (v0 + v1 + v2) / 3);
-                weights[RowAt(image, x, y, legacy)] += surface;
+                Add(image, x, y, legacy, surface, weights, blended);
                 continue;
             }
 
@@ -328,6 +394,14 @@ public static class PieceReader
                 weights[row]       += surface * counter.Counts[row] / inside;
                 counter.Counts[row] = 0;
             }
+
+            for (var k = 0; k < counter.Blended.Length; ++k)
+                if (counter.Blended[k] > 0)
+                {
+                    if (blended is not null)
+                        blended[k] += surface * counter.Blended[k] / inside;
+                    counter.Blended[k] = 0;
+                }
         }
     }
 

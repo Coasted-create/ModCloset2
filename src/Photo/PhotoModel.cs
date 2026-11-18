@@ -16,6 +16,9 @@ public sealed class MeshArena
     public Vector3[] Positions = Array.Empty<Vector3>();
     public Vector3[] Normals = Array.Empty<Vector3>();
     public Vector2[] Uvs = Array.Empty<Vector2>();
+
+    /// <summary> The second texture coordinates (the second pair of a four-value element): where a face's paint sits. </summary>
+    public Vector2[] Uvs2 = Array.Empty<Vector2>();
     public int[] Indices = Array.Empty<int>();
     public int VertexCount;
     public int IndexCount;
@@ -32,6 +35,7 @@ public sealed class MeshArena
         Grow(ref Positions, VertexCount + vertices);
         Grow(ref Normals, VertexCount + vertices);
         Grow(ref Uvs, VertexCount + vertices);
+        Grow(ref Uvs2, VertexCount + vertices);
         Grow(ref Indices, IndexCount + indices);
     }
 
@@ -59,6 +63,7 @@ public sealed class PhotoMesh
     public Vector3[] Positions => Arena.Positions;
     public Vector3[] Normals => Arena.Normals;
     public Vector2[] Uvs => Arena.Uvs;
+    public Vector2[] Uvs2 => Arena.Uvs2;
     public int[] Indices => Arena.Indices;
 
     public int IndexEnd
@@ -74,6 +79,12 @@ public sealed class PhotoModel
     public List<string> Materials { get; } = new();
     public List<string> Attributes { get; } = new();
     public List<PhotoMesh> Meshes { get; } = new();
+
+    /// <summary>
+    /// For each attribute, the materials of the parts it marks in LOD 0 (bit j = material j; materials past 31 count as
+    /// 31). Known when the reader asks which attributes are shown, so the answer can depend on what a part is made of.
+    /// </summary>
+    public uint[] AttributeMaterials { get; internal set; } = Array.Empty<uint>();
 }
 
 /// <summary>
@@ -120,7 +131,7 @@ public static class PhotoModelReader
     /// <paramref name="error"/> is one of <see cref="PhotoProblems.ModelReason"/> (a fixed reason, safe to log),
     /// <paramref name="detail"/> the numbers behind it, and <paramref name="overBudget"/> says the budget refused it.
     /// </summary>
-    public static PhotoModel? Read(byte[] data, int length, MeshArena arena, PhotoBudget budget, Func<IReadOnlyList<string>, uint> shown,
+    public static PhotoModel? Read(byte[] data, int length, MeshArena arena, PhotoBudget budget, Func<PhotoModel, uint> shown,
         out string error, out string detail, out bool overBudget)
     {
         error      = string.Empty;
@@ -147,7 +158,7 @@ public static class PhotoModelReader
     public static PhotoModel? Read(byte[] bytes, out string error, uint enabledAttributes = uint.MaxValue)
         => Read(bytes, bytes.Length, new MeshArena(), PhotoBudget.Default, _ => enabledAttributes, out error, out _, out _);
 
-    private static PhotoModel ReadUnsafe(byte[] b, int length, MeshArena arena, PhotoBudget budget, Func<IReadOnlyList<string>, uint> shown)
+    private static PhotoModel ReadUnsafe(byte[] b, int length, MeshArena arena, PhotoBudget budget, Func<PhotoModel, uint> shown)
     {
         var m = new PhotoModel();
         var r = new Reader(b, length);
@@ -295,7 +306,18 @@ public static class PhotoModelReader
         // Bones, bone tables and shape keys are not needed: the picture is the rest pose without shapes. The vertex and
         // index data are found by the header's offsets, so nothing after the materials is read.
 
-        var enabled     = shown(m.Attributes);
+        var attributeMaterials = new uint[Math.Min(m.Attributes.Count, 32)];
+        for (var mi = lodMeshIndex; mi < lodMeshIndex + lodMeshCount && mi < meshes.Count; ++mi)
+            for (var k = 0; k < meshes[mi].SubMeshCount && meshes[mi].SubMeshIndex + k < subMeshes.Length; ++k)
+            {
+                var mask = subMeshes[meshes[mi].SubMeshIndex + k].AttributeMask;
+                for (var a = 0; a < attributeMaterials.Length; ++a)
+                    if ((mask >> a & 1) != 0)
+                        attributeMaterials[a] |= 1u << Math.Min((int)meshes[mi].MaterialIndex, 31);
+            }
+
+        m.AttributeMaterials = attributeMaterials;
+        var enabled     = shown(m);
         var vertexStart = (long)vertexOffset[0];
         var indexStart0 = (long)indexOffset[0];
 
@@ -347,11 +369,13 @@ public static class PhotoModelReader
                 var p = Read(span, Start(vertexStart, mesh, pos, v), pos.Type);
                 arena.Positions[base0 + v] = new Vector3(Finite(p.X), Finite(p.Y), Finite(p.Z));
                 arena.Uvs[base0 + v] = Vector2.Zero;
+                arena.Uvs2[base0 + v] = Vector2.Zero;
                 arena.Normals[base0 + v] = Vector3.UnitY;
                 if (uv is { } ue)
                 {
                     var t = Read(span, Start(vertexStart, mesh, ue, v), ue.Type);
                     arena.Uvs[base0 + v] = new Vector2(Finite(t.X), Finite(t.Y));
+                    arena.Uvs2[base0 + v] = new Vector2(Finite(t.Z), Finite(t.W));
                 }
 
                 if (normal is { } ne)

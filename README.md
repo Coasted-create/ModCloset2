@@ -4,7 +4,7 @@ Your [Penumbra](https://github.com/xivdev/Penumbra) mods as a closet. Mod Closet
 FINAL FANTASY XIV that sorts your mods onto shelves by what they are on you (tops, shoes, earrings, tails, nails…),
 lets you try one on with a click, and keeps it only when you say so.
 
-> **Status: test build (0.5.0).** It has been used on one large mod library. Expect rough edges, and please report them.
+> **Status: test build (0.6.1).** It has been used on one large mod library. Expect rough edges, and please report them.
 
 ## What it does
 
@@ -13,9 +13,9 @@ lets you try one on with a click, and keeps it only when you say so.
   closet remembers.
 - **Try on, Keep, Put back.** A click tries a mod on over your look. Keep makes it stay, Put back ends the try, Undo
   takes the last step back. Nothing is kept until you say so.
-- **A photo on every card.** The closet draws a picture of each piece of clothing and jewellery itself, in the
-  background, from the mod's files. Nothing is put on your character for it.
-- **Outfit colours.** Recolour what you wear, piece by piece or as a whole outfit.
+- **A photo on every card.** The closet draws a picture of each piece itself, in the background: clothes, jewellery,
+  hair, tails, makeup and skin, on a dummy made from the game's own head and body. Nothing is put on your character.
+- **Outfit colours.** Recolour what you wear: one area, a whole piece in one step, or the whole outfit.
 - **Looks.** What you wear together is saved as a look by itself, to put on again later.
 - **On you.** Point at a part of your character to flip through that shelf.
 - **Make it its own mod.** Copy one piece out of a big mod into a new mod of its own. The mod it comes from is not
@@ -41,8 +41,7 @@ about half a minute.
 
 - Keep turns mods on or off in your Penumbra collection, as if you had done it there by hand.
 - Photos come by themselves: the shelf you look at first, the rest while the closet is open. They are kept in the
-  plugin's own folder. Settings → "Photos of your pieces" switches them off. Hair, tails, faces and skin have no
-  photos yet.
+  plugin's own folder. Settings → "Photos of your pieces" switches them off.
 - `/closet2 rescan` reads your mods again. `/closet2 debug` opens a plain fallback window.
 
 ## Credits and licence

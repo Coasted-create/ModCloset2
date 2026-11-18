@@ -1,4 +1,5 @@
 using System.Numerics;
+using ModCloset2.Colours;
 
 namespace ModCloset2.Photo;
 
@@ -69,6 +70,9 @@ public static class Studio
         public required SceneItem Item;
         public required PhotoPools Pools;
         public bool Cutout;
+
+        /// <summary> The face paint to lay on a face's skin (null elsewhere). </summary>
+        public TexImage? Decal;
     }
 
     /// <param name="maxOverdraw"> Rasterising work allowed, as a multiple of the pixels (<see cref="PhotoBudget.MaxOverdraw"/>). </param>
@@ -86,7 +90,7 @@ public static class Studio
         var prepared = new List<Prepared>(scene.Items.Count);
         foreach (var item in scene.Items)
             if (item.Surface.Kind != SurfaceKind.Hidden)
-                prepared.Add(Prepare(item, camera, w, h, pools));
+                prepared.Add(Prepare(item, camera, w, h, pools, scene.DecalImage));
 
         // 1. which triangle is in front, per pixel
         var budget = maxOverdraw * w * h;
@@ -179,7 +183,7 @@ public static class Studio
 
     // ------------------------------------------------------------------ preparing meshes
 
-    private static Prepared Prepare(SceneItem item, PhotoCamera camera, int w, int h, PhotoPools pools)
+    private static Prepared Prepare(SceneItem item, PhotoCamera camera, int w, int h, PhotoPools pools, TexImage? decal)
     {
         var mesh = item.Mesh;
         for (var v = mesh.VertexStart; v < mesh.VertexStart + mesh.VertexCount; ++v)
@@ -195,7 +199,9 @@ public static class Studio
         return new Prepared
         {
             Item = item, Pools = pools,
-            Cutout = s.Kind is SurfaceKind.Table or SurfaceKind.Painted && (s.Normal is not null || s.Diffuse is not null) && mesh.HasUvs,
+            Cutout = (s.Kind is SurfaceKind.Table or SurfaceKind.Painted && (s.Normal is not null || s.Diffuse is not null)
+                   || s.Kind is SurfaceKind.Hair && s.Normal is not null) && mesh.HasUvs,
+            Decal = s.Kind == SurfaceKind.SkinTextured && s.IsFace ? decal : null,
         };
     }
 
@@ -415,6 +421,80 @@ public static class Studio
         }
 
         return new PhotoImage { Width = w, Height = h, Rgba = rgba, Covered = covered, Seen = seen, LightBackdrop = dark };
+    }
+
+    /// <summary>
+    /// A texture shown as it is (brief 13: a texture-only part with nothing to put it on): cropped to the area that is
+    /// painted, fitted into four fifths of the picture, over the card colours. A texture of one channel (a face paint, a
+    /// mask) is drawn as ink in a light tone, its value as how much ink. "Painted" is where the alpha or, for one channel,
+    /// the value is above a sixteenth; a texture painted everywhere shows whole.
+    /// </summary>
+    public static PhotoImage Flat(TexImage tex, bool oneChannel, int width, int height, PhotoPools pools)
+    {
+        // the painted area, on a coarse grid so a large texture costs little
+        int tw = tex.Width, th = tex.Height;
+        int step = Math.Max(1, Math.Max(tw, th) / 256);
+        int x0 = tw, y0 = th, x1 = -1, y1 = -1;
+        for (var y = 0; y < th; y += step)
+        for (var x = 0; x < tw; x += step)
+        {
+            var o = tex.At(x, y);
+            var v = oneChannel ? tex.Rgba[o] : tex.Rgba[o + 3];
+            if (v < 16)
+                continue;
+            x0 = Math.Min(x0, x);
+            y0 = Math.Min(y0, y);
+            x1 = Math.Max(x1, x);
+            y1 = Math.Max(y1, y);
+        }
+
+        PhotoPools.Ensure(ref pools.Rgba, width * height * 4);
+        var rgba = pools.Rgba;
+        var ink  = new Vector3(0.82f, 0.78f, 0.84f);
+        var centre = new Vector2(0.5f, 0.46f);
+        var seen = 0;
+        float cw = 0, ch = 0, scale = 0, ox = 0, oy = 0;
+        if (x1 >= x0)
+        {
+            x1 = Math.Min(tw - 1, x1 + step);
+            y1 = Math.Min(th - 1, y1 + step);
+            cw = x1 - x0 + 1;
+            ch = y1 - y0 + 1;
+            scale = Math.Min(width * 0.8f / cw, height * 0.8f / ch);
+            ox = (width - cw * scale) / 2;
+            oy = (height - ch * scale) / 2;
+        }
+
+        for (var y = 0; y < height; ++y)
+        for (var x = 0; x < width; ++x)
+        {
+            var d  = Vector2.Distance(new Vector2((x + 0.5f) / width, (y + 0.5f) / height * 1.1f), centre * new Vector2(1, 1.1f));
+            var bg = Vector3.Lerp(BackgroundCentre, BackgroundEdge, Math.Clamp(d / 0.62f, 0, 1));
+            var colour = bg;
+            if (scale > 0)
+            {
+                var u = (x + 0.5f - ox) / scale;
+                var v = (y + 0.5f - oy) / scale;
+                if (u >= 0 && v >= 0 && u < cw && v < ch)
+                {
+                    var sample = Surfaces.Sample(tex, new Vector2((x0 + u) / tw, (y0 + v) / th));
+                    var (c, a) = oneChannel
+                        ? (ink, sample.X)
+                        : (new Vector3(ToLinear(sample.X), ToLinear(sample.Y), ToLinear(sample.Z)), sample.W);
+                    colour = Vector3.Lerp(bg, c, Math.Clamp(a, 0, 1));
+                }
+            }
+
+            var o = (y * width + x) * 4;
+            rgba[o]     = ToByte(colour.X);
+            rgba[o + 1] = ToByte(colour.Y);
+            rgba[o + 2] = ToByte(colour.Z);
+            rgba[o + 3] = 255;
+            if (Math.Abs(rgba[o] - ToByte(bg.X)) + Math.Abs(rgba[o + 1] - ToByte(bg.Y)) + Math.Abs(rgba[o + 2] - ToByte(bg.Z)) >= SeenDifference)
+                ++seen;
+        }
+
+        return new PhotoImage { Width = width, Height = height, Rgba = rgba, Covered = seen, Seen = seen };
     }
 
     /// <summary> Bright light rolls off softly instead of clipping (a filmic curve, ACES fitted by K. Narkowicz). </summary>

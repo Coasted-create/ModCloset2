@@ -209,6 +209,7 @@ public sealed partial class WindowFace
         // every frame: is the mouse over the cards (or the To sort list)? While it is, nothing jumps shelves there
         _s.GridHovered(Stats.GridHovered);
         PointingDone();
+        FinishLostDrag();
         ForgetPictureSlots();
         Wants = KeysWanted();
         _ui.End();
@@ -437,16 +438,25 @@ public sealed partial class WindowFace
             _s.Undo();
     }
 
+    private bool _settingsAsked;
+
+    /// <summary>
+    /// Opens the settings sheet on the next frame, under its button, as a click on the button would (from outside the
+    /// face: Dalamud's settings button). Nothing changes when it is open already.
+    /// </summary>
+    public void RequestSettings()
+        => _settingsAsked = true;
+
     private void SettingsButton(Rect r)
     {
         Stats.Places["settings"] = r;
-        if (Painter.IconButton(_ui, "settings", r, Icons.Settings, Loc.T("Settings"), true, _ui.IsOpen(PopSettings)).Clicked)
-        {
-            if (_ui.IsOpen(PopSettings))
-                _ui.ClosePopup();
-            else
-                _ui.OpenPopup(PopSettings, new Vector2(r.Right, r.Bottom + P(6)));
-        }
+        var clicked = Painter.IconButton(_ui, "settings", r, Icons.Settings, Loc.T("Settings"), true, _ui.IsOpen(PopSettings)).Clicked;
+        var asked   = _settingsAsked;
+        _settingsAsked = false;
+        if (clicked && _ui.IsOpen(PopSettings))
+            _ui.ClosePopup();
+        else if ((clicked || asked) && !_ui.IsOpen(PopSettings))
+            _ui.OpenPopup(PopSettings, new Vector2(r.Right, r.Bottom + P(6)));
     }
 
     /// <summary> Three small segments: the window, slim, and "On you" (not there yet). Returns its box. </summary>

@@ -74,8 +74,33 @@ public sealed partial class ClosetWindow : Window, IDisposable
     /// </summary>
     public Action? OnYouRequested { get; set; }
 
+    /// <summary>
+    /// Opens the window (if it is closed, in the shape it had last) with its settings sheet showing, as a click on the
+    /// settings button would: for Dalamud's settings button (UiBuilder.OpenConfigUi). The sheet is open on the next drawn
+    /// frame; called while it is open already, nothing changes.
+    /// </summary>
+    public void OpenSettings()
+    {
+        IsOpen = true;
+        _uncollapse = true;
+        BringToFront();
+        _face.RequestSettings();
+    }
+
+    private bool _uncollapse;
+
     public override void PreDraw()
     {
+        // OpenSettings on a collapsed window: unfold it once (afterwards the user may fold it again)
+        if (_uncollapse)
+        {
+            Collapsed          = false;
+            CollapsedCondition = ImGuiCond.Always;
+            _uncollapse        = false;
+        }
+        else if (Collapsed is not null)
+            Collapsed = null;
+
         // Esc puts back what is tried on; only when nothing is tried does it close the window, as Dalamud windows do.
         // Dalamud closes on Esc held in any later frame, so after a put back the window stays until Esc is let go:
         // one press never does both.
@@ -440,6 +465,8 @@ public sealed partial class ClosetWindow : Window, IDisposable
 
     public override void OnClose()
     {
+        // a colour drag still open (the window closed under it) closes its undo step
+        _face.WindowClosing();
         _keys.Clear();
         _chat.Clear();
         if (_toOnYou)

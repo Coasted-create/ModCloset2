@@ -531,5 +531,12 @@
   "“{0}” is a mod of its own now. It is switched off until you wear it.": "„{0}“ ist jetzt eine eigene Mod. Sie ist aus, bis du sie anziehst.",
   "“{0}” was written, but Penumbra did not take it in. Press “Rediscover mods” in Penumbra to see it.": "„{0}“ wurde geschrieben, aber Penumbra hat sie nicht aufgenommen. Drück in Penumbra „Rediscover mods“, um sie zu sehen.",
   "Photos of your pieces": "Fotos deiner Teile",
-  "Taking photos…": "Fotos werden gemacht…"
+  "Taking photos…": "Fotos werden gemacht…",
+  "{0} or {1}": "{0} oder {1}",
+  "These looks are the same. Click the one you are wearing.": "Diese Looks sind gleich. Klick den an, den du trägst.",
+  "{0}. This outfit dyes it its own way; your colours for it come back with their dyes.": "{0}. Dieses Outfit färbt es auf seine Art; deine Farben dafür kommen mit ihren Färbungen zurück.",
+  "{0}. Part of it was coloured outside the closet and is left as it is; colour it here to take it over.": "{0}. Ein Teil davon wurde außerhalb des Schranks gefärbt und bleibt so; färb es hier, um es zu übernehmen.",
+  "The whole piece": "Das ganze Teil",
+  "Colour the whole piece": "Das ganze Teil färben",
+  "Every part of it takes this colour, as a dye would.": "Jeder Teil davon nimmt diese Farbe an, wie bei einer Färbung."
 }

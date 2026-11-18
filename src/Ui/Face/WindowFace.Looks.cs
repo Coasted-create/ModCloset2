@@ -26,7 +26,8 @@ public sealed partial class WindowFace
             Group    = PieceGroup.Top,
             Icon     = Icons.Looks,
             Count    = looks.Pinned.Count,
-            WornName = looks.Now.Look is not null ? looks.Now.Name : string.Empty,
+            // the look's name, or the names of equal looks ("Glam one or Glam two"); "" for an outfit of its own
+            WornName = looks.Now.Name,
         };
 
     // ---- the view ----
@@ -66,10 +67,27 @@ public sealed partial class WindowFace
     }
 
     private float NowSlimHeight(WearingNow now, float w)
-        => P(12 + 48 + 10 + 34) + (now.CanPin || now.CanUpdate ? P(10 + 38) : 0) + P(12);
+    {
+        // the text beside the collage can reach below it (a long line under the name, two lines of it)
+        var (_, textH) = NowText(now, w - P(14 + 48 + 16 + 14));
+        var below      = Math.Max(0, textH - P(48 + 4));
+        return P(12 + 48 + 10 + 34) + below + (now.CanPin || now.CanUpdate ? P(10 + 38) : 0) + P(12);
+    }
 
+    /// <summary>
+    /// The line under the name ("You changed the shoes", "These looks are the same. Click the one you are wearing."),
+    /// wrapped to two lines at most, and the height of the label, the name and that line together.
+    /// </summary>
+    private (List<string> Lines, float Height) NowText(WearingNow now, float width)
+    {
+        var lines = now.ChangeText.Length > 0 ? Painter.Wrap(_c, now.ChangeText, width, Theme.Small, 2) : new List<string>();
+        var h     = _c.LineHeight(Theme.Label) + P(3) + _c.LineHeight(Theme.Strong) + (lines.Count > 0 ? P(3) + lines.Count * _c.LineHeight(Theme.Small) : 0);
+        return (lines, h);
+    }
+
+    /// <summary> The look's name, the names of equal looks ("Glam one or Glam two"), or "An outfit of its own". </summary>
     private string NowName(WearingNow now)
-        => now.Look is not null ? now.Name : Loc.T("An outfit of its own");
+        => now.Name.Length > 0 ? now.Name : Loc.T("An outfit of its own");
 
     /// <summary> "Wearing now": the collage, the name and what changed, the pieces, and Pin as new / Update. </summary>
     private void NowStrip(Rect r, ILooks looks, bool slim)
@@ -84,8 +102,7 @@ public sealed partial class WindowFace
         var tx  = collage.Right + P(16);
         var lh  = _c.LineHeight(Theme.Label);
         var sh  = _c.LineHeight(Theme.Strong);
-        var ch  = now.ChangeText.Length > 0 ? _c.LineHeight(Theme.Small) : 0;
-        var ty  = collage.Center.Y - (lh + P(3) + sh + (ch > 0 ? P(3) + ch : 0)) / 2;
+        var ch  = _c.LineHeight(Theme.Small);
 
         // buttons first (at the right, or on their own line when slim): the rest takes what is left
         var pinText = Loc.T("Pin as new");
@@ -114,14 +131,30 @@ public sealed partial class WindowFace
         var tile   = slim ? P(34) : P(38);
         var tilesW = now.Tiles.Count == 0 ? P(120) : now.Tiles.Count * (tile + P(6)) - P(6);
         var nameW  = slim ? right - tx : Math.Clamp(right - tx - P(16) - tilesW, Math.Min(P(130), right - tx), P(210));
+        var (changeLines, textH) = NowText(now, nameW);
+        var ty = slim ? Math.Max(r.Y + P(8), collage.Center.Y - textH / 2) : Math.Max(r.Y + P(4), collage.Center.Y - textH / 2);
         Painter.TextIn(_c, new Rect(tx, ty, nameW, lh), Loc.T("Wearing now"), Theme.Label, Theme.Muted);
-        Painter.TextIn(_c, new Rect(tx, ty + lh + P(3), nameW, sh), NowName(now), Theme.Strong, Theme.Text);
-        if (ch > 0)
-            Painter.TextIn(_c, new Rect(tx, ty + lh + P(3) + sh + P(3), nameW, ch), now.ChangeText, Theme.Small, Theme.Gold);
+        var nameBox = new Rect(tx, ty + lh + P(3), nameW, sh);
+        Stats.Places["now-name"] = nameBox;
+        var shownName = NowName(now);
+        var drawnW    = Painter.TextIn(_c, nameBox, shownName, Theme.Strong, Theme.Text);
+        if (drawnW < _c.Measure(shownName, Theme.Strong).X - 0.5f)
+        {
+            // cut: the whole name (or the equal looks' names) on hovering
+            _ui.Interact("now-name", nameBox, false);
+            _ui.Tip("now-name", nameBox, shownName);
+        }
+
+        var cy = nameBox.Bottom + P(3);
+        foreach (var line in changeLines)
+        {
+            Painter.TextIn(_c, new Rect(tx, cy, nameW, ch), line, Theme.Small, Theme.Gold);
+            cy += ch;
+        }
 
         // the pieces that are on, as small tiles; a changed one has a gold edge
         var x    = slim ? r.X + P(14) : tx + nameW + P(16);
-        var y    = slim ? collage.Bottom + P(10) : r.Center.Y - tile / 2;
+        var y    = slim ? Math.Max(collage.Bottom, ty + textH) + P(10) : r.Center.Y - tile / 2;
         var end  = slim ? r.Right - P(14) : right;
         var fits = Math.Max(0, (int)((end - x + P(6)) / (tile + P(6))));
         var show = fits >= now.Tiles.Count ? now.Tiles.Count : Math.Max(0, fits - 1);

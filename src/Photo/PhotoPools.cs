@@ -65,7 +65,7 @@ public sealed class PhotoPools
         => new (string, long)[]
         {
             ("file buffer", _file.Length),
-            ("vertices", Arena.Positions.Length * 12L + Arena.Normals.Length * 12L + Arena.Uvs.Length * 8L + Arena.Indices.Length * 4L),
+            ("vertices", Arena.Positions.Length * 12L + Arena.Normals.Length * 12L + Arena.Uvs.Length * 8L + Arena.Uvs2.Length * 8L + Arena.Indices.Length * 4L),
             ("per vertex while drawing", View.Length * 12L + Screen.Length * 8L + Tangents.Length * 12L + Bitangents.Length * 12L),
             ("framing", X.Length * 4L + Area.Length * 4L + SortX.Length * 4L + SortArea.Length * 4L + Points.Length * 12L + Mark.Length * 4L),
             ("drawing buffers", Depth.Length * 4L + Item.Length * 4L + Triangle.Length * 4L + W0.Length * 4L + W1.Length * 4L + Colour.Length * 12L + Coverage.Length * 4L),

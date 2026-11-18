@@ -8,7 +8,8 @@ namespace ModCloset2.Colours;
 // Pure code (no game, no Dalamud): linked into tests/ColourTests.
 
 /// <summary> What the user chose for one area: follow an outfit colour, keep the mod's own colour, or a colour by hand. </summary>
-public readonly record struct AreaChoice(ColourRole Follows, uint? Hand)
+/// <param name="Flat"> A hand colour given to the whole piece at once: every row takes it as it is, as a game dye does (no shading kept). </param>
+public readonly record struct AreaChoice(ColourRole Follows, uint? Hand, bool Flat = false)
 {
     /// <summary> The user said "keep this one": a hand colour, or the mod's own colour on purpose. </summary>
     public bool Pinned
@@ -17,14 +18,14 @@ public readonly record struct AreaChoice(ColourRole Follows, uint? Hand)
     public static AreaChoice Own
         => new(ColourRole.Own, null);
 
-    public static AreaChoice ByHand(uint rgb)
-        => new(ColourRole.Own, rgb & 0xFFFFFF);
+    public static AreaChoice ByHand(uint rgb, bool flat = false)
+        => new(ColourRole.Own, rgb & 0xFFFFFF, flat);
 
     public static AreaChoice Follow(ColourRole role)
         => new(role, null);
 
     public string Text
-        => Hand is { } h ? $"#{h:X6}" : Follows switch
+        => Hand is { } h ? (Flat ? "=" : string.Empty) + $"#{h:X6}" : Follows switch
         {
             ColourRole.Main   => "m",
             ColourRole.Second => "s",
@@ -42,6 +43,7 @@ public readonly record struct AreaChoice(ColourRole Follows, uint? Hand)
             "x" => Follow(ColourRole.Metal),
             "o" => Own,
             ['#', ..] when uint.TryParse(text.AsSpan(1), NumberStyles.HexNumber, null, out var v) => ByHand(v),
+            ['=', '#', ..] when uint.TryParse(text.AsSpan(2), NumberStyles.HexNumber, null, out var v) => ByHand(v, flat: true),
             _ => null,
         };
 }
@@ -65,11 +67,50 @@ public sealed class ColourMemory
     /// <summary> The colours a first start begins with (the mockup's: black, white, rose, gold). </summary>
     public static readonly OutfitPalette Default = new() { Main = 0x25202C, Second = 0xE9E3EA, Accent = 0xC8668A, Metal = 0xEBC98E };
 
+    /// <summary> The choices of a part made under one set of game dyes ("stain,stain2"; "" = made before dyes were remembered: any dyes). </summary>
+    private sealed class DyeSet
+    {
+        public string Dyes { get; set; } = string.Empty;
+        public Dictionary<string, AreaChoice> Areas { get; } = new(StringComparer.Ordinal);
+
+        public DyeSet Clone()
+        {
+            var c = new DyeSet { Dyes = Dyes };
+            foreach (var (id, a) in Areas)
+                c.Areas[id] = a;
+            return c;
+        }
+    }
+
+    /// <summary>
+    /// What the user chose for a part, per set of game dyes the piece wore (another outfit that dyes it otherwise has
+    /// choices of its own, or none), most recently used first. At most <see cref="MaxDyeSets"/> sets per part.
+    /// </summary>
     private sealed class PartEntry
     {
-        public Dictionary<string, AreaChoice> Areas { get; } = new(StringComparer.Ordinal);
+        public List<DyeSet> Sets { get; } = new();
         public long Used { get; set; }
+
+        public DyeSet? Exact(string dyes)
+            => Sets.FirstOrDefault(s => s.Dyes == dyes);
+
+        /// <summary> The set that holds under these dyes: their own, else the one made before dyes were remembered. Unknown dyes: the newest. </summary>
+        public DyeSet? For(string dyes)
+            => dyes.Length > 0 ? Exact(dyes) ?? Exact(string.Empty) : Exact(string.Empty) ?? Sets.FirstOrDefault();
+
+        public PartEntry Clone()
+        {
+            var e = new PartEntry { Used = Used };
+            e.Sets.AddRange(Sets.Select(s => s.Clone()));
+            return e;
+        }
+
+        public bool HasChoices
+            => Sets.Any(s => s.Areas.Count > 0);
     }
+
+    /// <summary> Dye sets kept per part (outfits that dye the piece differently); the one used longest ago goes first. </summary>
+    public const int MaxDyeSets = 4;
 
     private readonly Dictionary<string, PartEntry> _parts = new(StringComparer.Ordinal);
     private long _clock;
@@ -80,21 +121,36 @@ public sealed class ColourMemory
 
     // ---- areas ----
 
-    /// <summary> The choice for an area of a part, or null when the user never chose (then the defaults apply). </summary>
-    public AreaChoice? Choice(string part, AreaDef area)
+    /// <summary>
+    /// The choice for an area of a part under the game dyes the piece wears (<paramref name="dyes"/>, "" not known), or
+    /// null when the user never chose there (then the defaults apply).
+    /// </summary>
+    public AreaChoice? Choice(string part, AreaDef area, string dyes = "")
     {
-        if (!_parts.TryGetValue(part, out var entry))
+        if (!_parts.TryGetValue(part, out var entry) || entry.For(dyes) is not { } set)
             return null;
-        if (entry.Areas.TryGetValue(area.Id, out var exact))
+        if (set.Areas.TryGetValue(area.Id, out var exact))
             return exact;
         // the grouping may have moved a little (another anchor row): any of the area's rows will do, heaviest first
         foreach (var row in area.Rows)
-            if (entry.Areas.TryGetValue(row.Id, out var c))
+            if (set.Areas.TryGetValue(row.Id, out var c))
                 return c;
         return null;
     }
 
-    public void Choose(string part, AreaDef area, AreaChoice? choice)
+    /// <summary>
+    /// The part has choices, but none that hold under these dyes (they were made under other dyes: another outfit). Choices
+    /// made before dyes were remembered hold under any dyes and are never dormant.
+    /// </summary>
+    public bool Dormant(string part, string dyes)
+        => dyes.Length > 0 && _parts.TryGetValue(part, out var entry) && entry.HasChoices && entry.For(dyes) is null;
+
+    /// <param name="dyes">
+    /// The game dyes the piece wears now ("" not known). The choice goes into the set for these dyes; the sets for other
+    /// dyes stay as they are. Choices made before dyes were remembered are copied into the new set first (and stay, for
+    /// every other set of dyes).
+    /// </param>
+    public void Choose(string part, AreaDef area, AreaChoice? choice, string dyes = "")
     {
         if (!_parts.TryGetValue(part, out var entry))
         {
@@ -103,14 +159,32 @@ public sealed class ColourMemory
             _parts[part] = entry = new PartEntry();
         }
 
+        var set = dyes.Length > 0 ? entry.Exact(dyes) : entry.For(dyes);
+        if (set is null && dyes.Length > 0 && entry.Exact(string.Empty) is { } any)
+        {
+            // colours from before dyes were remembered: copied into a set for these dyes and changed there; the old set
+            // stays as it is and keeps showing under every other set of dyes
+            set      = any.Clone();
+            set.Dyes = dyes;
+        }
+
+        if (set is null)
+            entry.Sets.Insert(0, set = new DyeSet { Dyes = dyes });
+        entry.Sets.Remove(set);
+        entry.Sets.Insert(0, set);
+
         // one entry per area: drop entries stored under other rows of the same area
         foreach (var row in area.Rows)
-            entry.Areas.Remove(row.Id);
-        entry.Areas.Remove(area.Id);
+            set.Areas.Remove(row.Id);
+        set.Areas.Remove(area.Id);
         if (choice is { } c)
-            entry.Areas[area.Id] = c;
+            set.Areas[area.Id] = c;
+        if (set.Areas.Count == 0)
+            entry.Sets.Remove(set);
+        while (entry.Sets.Count > MaxDyeSets)
+            entry.Sets.Remove(entry.Sets.Last(s => s.Dyes.Length > 0 && s != set)); // the any-dyes set stays: it shows everywhere else
         entry.Used = ++_clock;
-        if (entry.Areas.Count == 0)
+        if (!entry.HasChoices)
             _parts.Remove(part);
         Trim();
     }
@@ -165,11 +239,10 @@ public sealed class ColourMemory
     /// </summary>
     public bool CopyPart(string from, string to)
     {
-        if (from == to || !_parts.TryGetValue(from, out var source) || source.Areas.Count == 0 || _parts.ContainsKey(to))
+        if (from == to || !_parts.TryGetValue(from, out var source) || !source.HasChoices || _parts.ContainsKey(to))
             return false;
-        var copy = new PartEntry { Used = ++_clock };
-        foreach (var (id, c) in source.Areas)
-            copy.Areas[id] = c;
+        var copy = source.Clone();
+        copy.Used = ++_clock;
         _parts[to] = copy;
         Trim();
         return true;
@@ -183,12 +256,7 @@ public sealed class ColourMemory
         var copy = new ColourMemory { Palette = Palette, DressEverything = DressEverything, _clock = _clock };
         copy.Saved.AddRange(Saved);
         foreach (var (key, entry) in _parts)
-        {
-            var e = new PartEntry { Used = entry.Used };
-            foreach (var (id, c) in entry.Areas)
-                e.Areas[id] = c;
-            copy._parts[key] = e;
-        }
+            copy._parts[key] = entry.Clone();
 
         return copy;
     }
@@ -211,8 +279,7 @@ public sealed class ColourMemory
         {
             a._parts.TryGetValue(key, out var x);
             b._parts.TryGetValue(key, out var y);
-            if (x is null || y is null || x.Areas.Count != y.Areas.Count
-             || x.Areas.Any(kv => !y.Areas.TryGetValue(kv.Key, out var other) || other != kv.Value))
+            if (x is null || y is null || Choices(x).ToJsonString() != Choices(y).ToJsonString())
                 yield return key;
         }
     }
@@ -292,7 +359,11 @@ public sealed class ColourMemory
         }
     }
 
-    /// <summary> {"part": {"u": used, "a": {"area": "m" | "s" | "a" | "x" | "o" | "#RRGGBB"}}} </summary>
+    /// <summary>
+    /// {"part": {"u": used, "a": {"area": "m" | "s" | "a" | "x" | "o" | "#RRGGBB" | "=#RRGGBB"}, "d": "stain,stain2",
+    /// "o": {"stain,stain2": {"area": …}}}}: "a" and "d" are the dye set used last ("d" left out: any dyes), "o" the sets
+    /// for other dyes, newest first.
+    /// </summary>
     private string PartsJson(IEnumerable<string> keys)
     {
         var root = new JsonObject();
@@ -304,13 +375,39 @@ public sealed class ColourMemory
                 continue;
             }
 
-            var areas = new JsonObject();
-            foreach (var (id, c) in entry.Areas)
-                areas[id] = c.Text;
-            root[key] = new JsonObject { ["u"] = entry.Used, ["a"] = areas };
+            var o = Choices(entry);
+            o.Insert(0, "u", entry.Used);
+            root[key] = o;
         }
 
         return root.ToJsonString();
+    }
+
+    private static JsonObject Choices(PartEntry entry)
+    {
+        static JsonObject Areas(DyeSet set)
+        {
+            var areas = new JsonObject();
+            foreach (var (id, c) in set.Areas.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+                areas[id] = c.Text;
+            return areas;
+        }
+
+        var o = new JsonObject();
+        if (entry.Sets.Count == 0)
+            return o;
+        o["a"] = Areas(entry.Sets[0]);
+        if (entry.Sets[0].Dyes.Length > 0)
+            o["d"] = entry.Sets[0].Dyes;
+        if (entry.Sets.Count > 1)
+        {
+            var others = new JsonObject();
+            foreach (var set in entry.Sets.Skip(1))
+                others[set.Dyes] = Areas(set);
+            o["o"] = others;
+        }
+
+        return o;
     }
 
     private void ReadParts(string json, bool replace = false)
@@ -331,11 +428,23 @@ public sealed class ColourMemory
                 }
 
                 var entry = new PartEntry { Used = o["u"]?.GetValue<long>() ?? 0 };
-                if (o["a"] is JsonObject areas)
+                void Read(string dyes, JsonNode? areasNode)
+                {
+                    if (areasNode is not JsonObject areas || entry.Exact(dyes) is not null || entry.Sets.Count >= MaxDyeSets)
+                        return;
+                    var set = new DyeSet { Dyes = dyes };
                     foreach (var (id, value) in areas)
                         if (AreaChoice.Parse(value?.GetValue<string>()) is { } c)
-                            entry.Areas[id] = c;
-                if (entry.Areas.Count > 0)
+                            set.Areas[id] = c;
+                    if (set.Areas.Count > 0)
+                        entry.Sets.Add(set);
+                }
+
+                Read(o["d"]?.GetValue<string>() ?? string.Empty, o["a"]);
+                if (o["o"] is JsonObject others)
+                    foreach (var (dyes, set) in others)
+                        Read(dyes, set);
+                if (entry.HasChoices)
                     _parts[key] = entry;
                 else if (replace)
                     _parts.Remove(key);
