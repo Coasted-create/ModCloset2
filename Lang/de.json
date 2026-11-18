@@ -611,5 +611,20 @@
   "This mod has no options to choose.": "Diese Mod hat keine Optionen zur Auswahl.",
   "Right ring slot": "Platz: Ring rechts",
   "Left ring slot": "Platz: Ring links",
-  "Put it back beside the closet": "Wieder neben den Schrank setzen"
+  "Put it back beside the closet": "Wieder neben den Schrank setzen",
+  "Body: {0}": "Körper: {0}",
+  "Race: {0}": "Volk: {0}",
+  "Any body": "Jeder Körper",
+  "Any race": "Jedes Volk",
+  "Filters": "Filter",
+  "All bodies": "Alle Körper",
+  "All races": "Alle Völker",
+  "Hyur": "Hyuran",
+  "Elezen": "Elezen",
+  "Lalafell": "Lalafell",
+  "Miqo'te": "Miqo'te",
+  "Roegadyn": "Roegadyn",
+  "Au Ra": "Au Ra",
+  "Hrothgar": "Hrothgar",
+  "Viera": "Viera"
 }

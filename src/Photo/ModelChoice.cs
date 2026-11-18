@@ -16,9 +16,12 @@ namespace ModCloset2.Photo;
 /// <item> The candidates: the model files the definition redirects for this slot (game paths of the slot, a file of
 /// the mod behind them, swaps to such a file included) with the mod's default options on; only when none is on, those
 /// of options that are off. </item>
-/// <item> The race: the player's own when the mod has a model of it; else the nearest along the player's fallback chain
-/// (<see cref="Races.Chain"/>, what the library uses to decide what fits); else the race the mod has most models of
-/// (<see cref="PhotoMaker.RacesByCount"/>); else any. Race 0 (nobody logged in): the mod's most common. </item>
+/// <item> The race (<see cref="PictureRace.Of"/>): the race the mod is made for, never the one of whoever is logged in
+/// when the mod is not made for it. Models of one race only: that race. Models of several races: the race of the body
+/// the mod names (a Rue, YAB or Bibo+ top is made for the Midlander woman's body, c0201; a TBSE one for the Midlander
+/// man's, c0101) when it has models of it; else the player's own, then along the player's fallback chain
+/// (<see cref="Races.Chain"/>); else the race the mod has most models of (<see cref="PhotoMaker.RacesByCount"/>). The
+/// body under a garment is the garment's own model, so it is always of the garment's race. </item>
 /// <item> Several models left (two item sets in one slot, a right and a left ring): the first in the definition's
 /// order (the default data, then the groups and their options as written, files as written). The same every time. </item>
 /// </list>
@@ -36,11 +39,23 @@ public static class ModelChoice
             return null;
 
         var races = candidates.Select(c => c.Race).ToHashSet();
-        var pick  = Races.Chain(race).FirstOrDefault(races.Contains);
+        var pick  = PictureRace.Of(races, race, GamePaths.IsGear(socket) ? PictureRace.MadeFor(TextsOf(files.Definition)) : 0);
         if (pick == 0)
             pick = files.RacesByCount.FirstOrDefault(races.Contains);
         var first = pick != 0 ? candidates.First(c => c.Race == pick) : candidates[0];
         return new Choice(first.GamePath, first.Race);
+    }
+
+    /// <summary> The words a mod names itself and its choices with: its name, its groups' and options' names. </summary>
+    public static IEnumerable<string> TextsOf(ModDefinition def)
+    {
+        yield return def.Name;
+        foreach (var g in def.Groups)
+        {
+            yield return g.Name;
+            foreach (var o in g.Options)
+                yield return o.Name;
+        }
     }
 }
 
@@ -205,7 +220,7 @@ public static partial class PartPlanner
             var name = GearName().Match(e.GamePath[(e.GamePath.LastIndexOf('/') + 1)..]);
             var setType = e.Info.SetType == 'a' ? 'a' : 'e';
             var suffixes = name.Success ? new[] { name.Groups[3].Value } : Suffixes(ask.Socket);
-            foreach (var race in RaceOrder(ask.Race, e.Race))
+            foreach (var race in OwnFirst(e.Race, ask.Race))
                 foreach (var suffix in suffixes)
                 {
                     var folder = setType == 'a' ? "accessory" : "equipment";
@@ -236,6 +251,13 @@ public static partial class PartPlanner
     /// <summary> The races to try for a game model: the player's chain, the files' own, then the fallbacks; each once. </summary>
     private static IEnumerable<int> RaceOrder(int player, int own)
         => Races.Chain(player).Concat(own > 0 ? [own] : []).Concat(Fallback).Where(r => r > 0).Distinct();
+
+    /// <summary>
+    /// The races to try for the game's model under a recolour: the race its own files are for first (a recolour of the
+    /// Midlander woman's top is shown on her model, whoever is logged in), then the player's chain, then the fallbacks.
+    /// </summary>
+    private static IEnumerable<int> OwnFirst(int own, int player)
+        => (own > 0 ? [own] : Array.Empty<int>()).Concat(Races.Chain(player)).Concat(Fallback).Where(r => r > 0).Distinct();
 
     // ------------------------------------------------------------------ hair, ears, tail, face
 

@@ -369,6 +369,8 @@ public static partial class FactReader
     private static void Add(Acc acc, PathInfo info, string gamePath, string local, int gi, int oi, bool on)
     {
         acc.Paths.Add(gamePath);
+        if (info.Socket == Socket.BodyBase && !gamePath.StartsWith("chara/human/", StringComparison.Ordinal))
+            acc.Races.UnionWith(GamePaths.SkinRaces(gamePath));
         if (acc.Facts.Socket == Socket.Rings && GamePaths.FingerOfPath(gamePath) is { } finger)
             (info.File == FileKind.Model ? acc.Fingers : acc.TextureFingers).Add(finger);
         acc.Options.Add((gi, oi));

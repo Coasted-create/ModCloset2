@@ -42,8 +42,7 @@ public sealed partial class WindowFace
         var w = area.W - P(24);
         if (slotRow)
         {
-            SlotButton(new Rect(x + P(4), y, Math.Min(w - P(4), SlotButtonWidth()), P(28)));
-            y += P(28) + P(8);
+            y += FilterRow(x + P(4), y, w - P(4), P(28)) + P(8);
         }
         if (_s.Suggestion is { } sug)
             y += Banner(new Rect(x, y, w, 0), sug, true) + P(10);

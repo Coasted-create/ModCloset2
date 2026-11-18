@@ -110,6 +110,15 @@ public sealed class Card
     /// </summary>
     public IReadOnlyList<string> OptionGroups { get; init; } = Array.Empty<string>();
 
+    /// <summary> The body mods it is made for ("Rue", "Bibo+"…; <see cref="PartInfo.Bodies"/>), for the Body filter; empty: any. </summary>
+    public IReadOnlyList<string> Bodies { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// The races it is made for, as the Race filter names them ("Miqo'te", "Lalafell", "Au Ra", "Viera"…; from
+    /// <see cref="PartInfo.RaceCodes"/>, male and female of a race together), empty: any race.
+    /// </summary>
+    public IReadOnlyList<string> Races { get; init; } = Array.Empty<string>();
+
     /// <summary> The user moved it here (so "Put back where the closet had it" is offered). </summary>
     public bool Moved { get; init; }
 
@@ -365,6 +374,26 @@ public interface IClosetSession
     /// stays chosen across shelves and searches while any card there has that slot; otherwise it reads "" again.
     /// </summary>
     string SlotChip { get => string.Empty; set { } }
+
+    /// <summary>
+    /// One chip per body mod the shown cards are made for ("Rue" 40, "Bibo+" 12, …) plus, last, "Any body" (Id "any")
+    /// for cards tied to no body; counts over the cards shown (shelf after the kind chip, or the search results), a card
+    /// listed under each of its bodies. Empty when all cards are tied to no body. Ids are the body names.
+    /// </summary>
+    IReadOnlyList<KindChip> BodyChips => Array.Empty<KindChip>();
+
+    /// <summary> The chosen body chip ("" = all); same keeping/clearing rule as <see cref="SlotChip"/>. </summary>
+    string BodyChip { get => string.Empty; set { } }
+
+    /// <summary>
+    /// One chip per race the shown cards are made for ("Miqo'te" 30, "Lalafell" 4, …; in the game's race order) plus,
+    /// last, "Any race" (Id "any") for cards tied to no race; same counting as <see cref="BodyChips"/>. Empty when all
+    /// cards are tied to no race. Ids are the race names in English.
+    /// </summary>
+    IReadOnlyList<KindChip> RaceChips => Array.Empty<KindChip>();
+
+    /// <summary> The chosen race chip ("" = all); same keeping/clearing rule as <see cref="SlotChip"/>. </summary>
+    string RaceChip { get => string.Empty; set { } }
     IReadOnlyList<Card> Cards { get; }
 
     /// <summary>

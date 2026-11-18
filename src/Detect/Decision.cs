@@ -57,8 +57,9 @@ public static partial class Decision
     {
         var result = new ModDetection { DetectorVersion = detectorVersion, Problems = facts.Problems.ToList() };
 
-        // The "Other" part only stands on its own when it is more than helper files for the worn parts.
-        var parts = facts.Parts.Where(p => p.Socket != Socket.Other || !IsSupportOnly(p, facts)).ToList();
+        // The "Other" part only stands on its own when it is more than helper files for the worn parts. Skin textures
+        // read as helper files by an older reader (made-up paths) are the skin.
+        var parts = facts.Parts.Select(AsSkin).Where(p => p.Socket != Socket.Other || !IsSupportOnly(p, facts)).ToList();
 
         // Rule 3: gear models that show only bare skin are the body (a body mod's shapes for the bare character). In a
         // body mod (one with such models, or with body models of its own) every gear model on the bare body's sets (the
@@ -132,6 +133,7 @@ public static partial class Decision
             MergeBody(result, facts, bare);
         JoinSculptTextures(result, facts);
         OneThingOneAnswer(result);
+        foreach (var p in result.Parts) p.Bodies = BodiesFor(facts, result, p);
         return result;
     }
 
@@ -207,6 +209,25 @@ public static partial class Decision
     private static bool MakeupChoice(GroupFacts? g)
         => g is not null && g.Options.Count(o => !Words.Tokens(o).Any(t => t is "off" or "none" or "omit" or "disable" or "disabled" or "dont" or "no" or "remove" or "vanilla" or "default")) >= 2;
 
+    /// <summary>
+    /// The body mods a part is made for ("Rue", "Bibo+"…): what its option groups and options (also those that are off:
+    /// a mod with sizes for several bodies is made for all of them), the author's folder names, the mod's name and its
+    /// tags say. Only for what is worn on the body: the clothes slots, the body itself, and garments worn through an
+    /// accessory slot. Material names do not count (most bodies share the same skin materials, "bibo" among them).
+    /// </summary>
+    public static List<string> BodiesFor(ModFacts facts, ModDetection result, PartInfo part)
+    {
+        var onBody = part.Socket is Socket.Body or Socket.Hands or Socket.Legs or Socket.Feet or Socket.BodyBase
+                  || GamePaths.IsGear(part.Socket) && part.Piece is Pieces.Top or Pieces.Bottoms or Pieces.Legwear or Pieces.Shoes or Pieces.Gloves;
+        if (!onBody)
+            return new List<string>();
+
+        // The body part speaks also for the bare gear models merged into it (rule 3).
+        var sources = facts.Parts.Where(f => f.Socket == part.Socket
+            || part.Socket == Socket.BodyBase && GamePaths.IsGear(f.Socket) && result.Parts.All(r => r.Socket != f.Socket));
+        return BodyMods.InAll(sources.SelectMany(f => f.Texts).Where(t => t.Source != "material").Select(t => t.Text).Append(facts.Name).Concat(facts.Tags));
+    }
+
     /// <summary> The connected groups (two or more) of parts that a relation links. </summary>
     private static List<List<PartInfo>> Groups(List<PartInfo> parts, Func<PartInfo, PartInfo, bool> linked)
     {
@@ -229,6 +250,28 @@ public static partial class Decision
     private static bool SameModel(PartFacts a, PartFacts b)
         => a.Model is { Area: > 0 } ma && b.Model is { Area: > 0 } mb && GamePaths.IsGear(a.Socket) && GamePaths.IsGear(b.Socket)
          && MathF.Abs(ma.Area - mb.Area) <= 0.01f * MathF.Max(ma.Area, mb.Area);
+
+    /// <summary> Files one can see (textures, materials, models) and none of the helpers a body needs (skeletons, physics, shaders, animations). </summary>
+    private static bool SeenFiles(PartFacts p)
+        => p.Paths.Any(x => x.EndsWith(".tex", StringComparison.Ordinal) || x.EndsWith(".mtrl", StringComparison.Ordinal) || x.EndsWith(".mdl", StringComparison.Ordinal))
+         && !p.Paths.Any(x => Path.GetExtension(x) is ".sklb" or ".skp" or ".phyb" or ".kdb" or ".pbd" or ".shpk" or ".pap" or ".tmb" or ".eid" or ".atch" or ".avfx");
+
+    /// <summary>
+    /// Facts of an older reader put a body's skin textures at made-up paths ("…/chara/bibo_mid_base.tex") into a helper
+    /// Other part. When every path of it is such a texture, it is the skin: a texture-only body part, with the races
+    /// its folders name.
+    /// </summary>
+    private static PartFacts AsSkin(PartFacts p)
+    {
+        if (p.Socket != Socket.Other || p.Paths.Count == 0 || p.OtherKinds.Keys.Any(k => k != "helper") || !p.Paths.All(GamePaths.IsSkinTexture))
+            return p;
+        return new PartFacts
+        {
+            Socket = Socket.BodyBase, PathCount = p.PathCount, Paths = p.Paths, Sets = p.Sets, Metas = p.Metas, Groups = p.Groups,
+            Texts = p.Texts, Shaders = p.Shaders, FromCustomPaths = true,
+            RaceCodes = p.Paths.SelectMany(GamePaths.SkinRaces).Distinct().Order().ToList(),
+        };
+    }
 
     /// <summary>
     /// A gear part whose model has no surface of its own, only bare skin; on the bare body's sets also one with a trace of
@@ -428,6 +471,14 @@ public static partial class Decision
             best       = p.Socket == Socket.BodyBase && p.HasModel ? Pieces.Bodies : SlotPrior(p.Socket);
             confidence = Math.Max(confidence, Tuning.Gear.ConfConclusive);
         }
+        else if (p.Socket == Socket.Other && p.OtherKinds.Count > 0 && p.OtherKinds.Keys.All(k => k is "helper" or "custom") && SeenFiles(p)
+                 && folder.Speaks && folder.Top is { Length: > 0 } named && named != Pieces.Other)
+        {
+            // Files the reader can only call helpers (textures, materials, models at paths it does not know), in a folder
+            // of the user's that names a shelf: the folder wins. Skeletons, physics and shaders stay helpers.
+            best       = named;
+            confidence = v.ConfTwoOverSlot;
+        }
         else if (notWorn && !(p.Socket == Socket.Other && p.OtherKinds.ContainsKey("custom") && !Pieces.IsOutfitPiece(best)))
         {
             best       = Pieces.Other;
@@ -453,7 +504,7 @@ public static partial class Decision
             Covers     = body.Covers,
             Signature  = Signature(p, body),
             TextureOnly = !p.HasModel && p.SwappedFrom.Count == 0 && p.Socket is not Socket.Other,
-            RaceCodes  = GamePaths.TiesRace(p.Socket) ? p.RaceCodes.ToList() : new List<int>(),
+            RaceCodes  = p.Socket is Socket.Other or Socket.MainHand or Socket.OffHand ? new List<int>() : p.RaceCodes.ToList(),
             Groups     = p.Groups.ToList(),
             Models     = Math.Max(1, p.ModelSets.Count),
         };

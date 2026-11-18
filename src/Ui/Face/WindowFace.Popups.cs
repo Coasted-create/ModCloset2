@@ -44,7 +44,16 @@ public sealed partial class WindowFace
                     OtherPicked(item, Menu.Draw(_ui, PopOther, _ui.PopupAnchor, OtherMenu(item), 200));
                     break;
                 case PopSlotChips:
-                    SlotChipsMenu();
+                    FilterMenu(Filters[0]);
+                    break;
+                case PopBodyChips:
+                    FilterMenu(Filters[1]);
+                    break;
+                case PopRaceChips:
+                    FilterMenu(Filters[2]);
+                    break;
+                case PopFilters:
+                    FiltersMenu();
                     break;
                 case PopKinds:
                     KindsMenu();

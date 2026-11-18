@@ -575,7 +575,7 @@ public static partial class Decision
             Covers      = body.Covers,
             Signature   = Signature(p, body),
             TextureOnly = !p.HasModel && p.SwappedFrom.Count == 0,
-            RaceCodes   = new List<int>(),
+            RaceCodes   = p.RaceCodes.ToList(), // the race codes of its models (c0201…): the closet's Race filter
             Groups      = p.Groups.ToList(),
             Models      = Math.Max(1, p.ModelSets.Count),
             Hands       = HandsOf(p),

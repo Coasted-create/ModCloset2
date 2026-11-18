@@ -8,19 +8,11 @@ namespace ModCloset2.Library;
 /// </summary>
 public static partial class BodyFit
 {
-    /// <summary> Known bodies and the words mods use for them (lower case, whole words only: "LaRue" is not "Rue"). </summary>
-    public static readonly (string Name, string[] Words)[] Bodies =
-    {
-        ("Rue", new[] { "rue" }),
-        ("Tre", new[] { "tre" }),
-        ("YAB", new[] { "yab" }),
-        ("Bibo+", new[] { "bibo", "bibop" }),
-        ("TBSE", new[] { "tbse" }),
-        ("Lavabod", new[] { "lavabod", "lava" }),
-        ("LaRue", new[] { "larue" }),
-        ("Gen3", new[] { "gen3" }),
-        ("Solace", new[] { "solace" }),
-    };
+    /// <summary>
+    /// Known bodies and the words mods use for them (lower case, whole words only here: "LaRue" is not "Rue"): the
+    /// detection's list (<see cref="Detect.BodyMods.All"/>), one list for both.
+    /// </summary>
+    public static readonly (string Name, string[] Words)[] Bodies = Detect.BodyMods.All;
 
     public static readonly string[] Names = Bodies.Select(b => b.Name).ToArray();
 

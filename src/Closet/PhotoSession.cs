@@ -175,6 +175,8 @@ public sealed partial class ClosetSession
             sig.Add(version);
         }
 
+        // the race logged in: a two-race part's picture depends on it (RaceKey), so a change looks at the photos again
+        sig.Add(PlayerRace());
         _makerSig = sig.ToHashCode();
     }
 
@@ -514,7 +516,7 @@ public sealed partial class ClosetSession
         {
             ModFolder = part.Mod.Facts?.Folder ?? string.Empty,
             Socket    = part.Key.Socket,
-            Race      = Race(),
+            Race      = PlayerRace(),
             Width     = PhotoWidth,
             Under     = UnderOf(part).Under,
         };
@@ -682,7 +684,7 @@ public sealed partial class ClosetSession
     private bool Settled(LibPart part)
         => _photos.TryGetValue(part.Key, out var e) && e.Stamp == StampOf(part);
 
-    private readonly ConditionalWeakTable<LibMod, StrongBox<(int Version, string Stamp)[]>> _stamps = new();
+    private readonly ConditionalWeakTable<LibMod, StrongBox<(int Version, Socket Socket, string Race, string Stamp)[]>> _stamps = new();
 
     /// <summary>
     /// What decides a part's picture: the mod's fingerprint as the library has it, the maker's version for the part's kind,
@@ -702,14 +704,57 @@ public sealed partial class ClosetSession
     private string PlainStamp(LibPart part)
     {
         var version = _makerVersion[(byte)part.Key.Socket];
-        var box = _stamps.GetValue(part.Mod, static _ => new StrongBox<(int, string)[]>(Array.Empty<(int, string)>()));
+        var race = RaceKey(part);
+        var socket = race.Length > 0 ? part.Key.Socket : Socket.None;
+        var box = _stamps.GetValue(part.Mod, static _ => new StrongBox<(int, Socket, string, string)[]>(Array.Empty<(int, Socket, string, string)>()));
         var known = box.Value ?? [];
-        foreach (var (v, stamp) in known)
-            if (v == version)
+        foreach (var (v, s, r, stamp) in known)
+            if (v == version && s == socket && r == race)
                 return stamp;
-        var made = PhotoStore.Hash($"{part.Mod.Facts?.Stamp}|{version}|{PhotoWidth}")[..8];
-        box.Value = [..known, (version, made)];
+        var made = PhotoStore.Hash(race.Length > 0 ? $"{part.Mod.Facts?.Stamp}|{version}|{PhotoWidth}|{race}" : $"{part.Mod.Facts?.Stamp}|{version}|{PhotoWidth}")[..8];
+        box.Value = known.Length < 64 ? [..known, (version, socket, race, made)] : [(version, socket, race, made)];
         return made;
+    }
+
+    /// <summary>
+    /// The race a gear part's photo is drawn on, as far as it can differ (0.7.7: Rue tops drawn on the Lalafell model of
+    /// the one logged in): "" for a part with models of one race only (its photo never depends on who is logged in, and
+    /// its stamp is the one it always had, so it is not taken again); for a part with models of several races, the race
+    /// <see cref="Photo.PictureRace.Of"/> picks for the player now ("race=201", "race=0" when the
+    /// mod's own most common); for a recolour (materials and textures, no model), "own" (it is drawn on its own race's
+    /// model now). Those two kinds had photos of the logged-in character's race, so their stamp changes once, and after
+    /// that only when another character would see another model.
+    /// </summary>
+    private string RaceKey(LibPart part)
+    {
+        var socket = part.Key.Socket;
+        if (!Detect.GamePaths.IsGear(socket) || part.Mod.Facts is not { } facts || !facts.Codes.TryGetValue(socket, out var codes))
+            return string.Empty;
+        var models = codes.Models.Where(r => r > 0).ToList();
+        if (models.Count == 1)
+            return string.Empty;
+        if (models.Count == 0)
+            return codes.Other.Any(r => r > 0) ? "own" : string.Empty;
+        var texts = facts.Groups.SelectMany(g => g.Options.Select(o => o.Name).Prepend(g.Name)).Prepend(part.Mod.Name);
+        return "race=" + Photo.PictureRace.Of(models, PlayerRace(), Photo.PictureRace.MadeFor(texts));
+    }
+
+    private long _raceFrame = -1;
+    private int _raceNow;
+
+    /// <summary> The player's race, asked once a frame (stamps are made for every card shown). </summary>
+    private int PlayerRace()
+    {
+        if (_raceFrame != _frame)
+        {
+            _raceFrame = _frame;
+            // nobody logged in for a moment (a zone change, the title screen): the last character's race stands, so the
+            // photos of two-race parts are not taken again for the moment
+            if (Race() is var now and not 0)
+                _raceNow = now;
+        }
+
+        return _raceNow;
     }
 
     // ======== what makeup stands on (PhotoAsk.Under) ========

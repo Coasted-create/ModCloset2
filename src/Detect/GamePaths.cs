@@ -176,6 +176,10 @@ public static partial class GamePaths
         if (p.StartsWith("shader/", StringComparison.Ordinal) || ext is "shpk" || file == FileKind.Skeleton)
             return Other(file, "helper");
 
+        // A body's skin texture by its name (bibo_mid_base.tex, gen3_raen_n.tex…), wherever the mod put it: the skin.
+        if (file == FileKind.Texture && IsSkinTexture(p))
+            return new PathInfo(Socket.BodyBase, string.Empty, file, '\0', 0, 0, false);
+
         // Files at made-up paths (chara/authorname/…, chara/bibo_mid_base.tex): they belong to the part whose materials
         // or models name them.
         if (p.StartsWith("chara/", StringComparison.Ordinal) && file is FileKind.Texture or FileKind.Material or FileKind.Model)
@@ -266,6 +270,40 @@ public static partial class GamePaths
             "ear"           => Socket.EarShape,
             _               => GearSlot(slot) is var s && s != Socket.None ? s : null,
         };
+
+    // bibo_mid_base.tex, bibop_raen_norm.tex, gen3_xaela_mask.tex, tbse_high_d.tex: a body mod's word, then the race and the role.
+    [GeneratedRegex(@"(?:^|/)(?:bibo|bibop|gen3|tbse|eve|otopop)_[a-z0-9_]+\.tex$")]
+    private static partial Regex SkinTextureName();
+
+    /// <summary> True for a texture named like a body mod's skin texture, at any path (the folders before it do not matter). </summary>
+    public static bool IsSkinTexture(string gamePath)
+        => SkinTextureName().IsMatch(gamePath.ToLowerInvariant());
+
+    private static readonly (string[] Words, int Race)[] RaceWords =
+    {
+        (new[] { "midlander", "mid", "hyur" }, 1), (new[] { "highlander", "high" }, 2), (new[] { "elezen", "elzen", "elf" }, 3),
+        (new[] { "miqote", "miqo", "miqo'te" }, 4), (new[] { "roegadyn", "roe" }, 5), (new[] { "lalafell", "lala" }, 6),
+        (new[] { "aura", "raen", "xaela" }, 7), (new[] { "hrothgar", "hroth" }, 8), (new[] { "viera", "rava", "veena" }, 9),
+    };
+
+    private static readonly HashSet<string> MaleBodies = new(StringComparer.Ordinal) { "tbse", "w25", "thicclander" };
+
+    /// <summary>
+    /// The game race codes a skin texture at a made-up path is for, from the race words in its folders and name
+    /// ("…/midlander_elzen_miqote/chara/bibo_mid_base.tex" → 201, 601, 801): female codes for female bodies (Bibo+,
+    /// Gen3…), male codes for male ones (TBSE). Empty when it names no race.
+    /// </summary>
+    public static List<int> SkinRaces(string gamePath)
+    {
+        var tokens = Regex.Split(gamePath.ToLowerInvariant(), "[^a-z0-9']+").Where(t => t.Length > 0).ToList();
+        var male = tokens.Any(MaleBodies.Contains);
+        var races = new SortedSet<int>();
+        foreach (var t in tokens)
+            foreach (var (words, race) in RaceWords)
+                if (words.Contains(t))
+                    races.Add(((race - 1) * 2 + (male ? 1 : 2)) * 100 + 1);
+        return races.ToList();
+    }
 
     /// <summary> The ring finger a slot name names: 'r' for "rfinger", 'l' for "lfinger", else null. </summary>
     public static char? Finger(string slot)

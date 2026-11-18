@@ -178,6 +178,13 @@ public sealed class PartInfo
     /// <summary> Game race codes it has files for (201, 801…); empty: not tied to a race. </summary>
     public List<int> RaceCodes { get; set; } = new();
 
+    /// <summary>
+    /// The body mods it is made for ("Rue", "Bibo+", "TBSE", "Neolithe"…), from its model paths, option names, mod name
+    /// and tags (the detector's body list); empty: not tied to a body (vanilla, or unknown). A mod with sizes for several
+    /// bodies lists them all.
+    /// </summary>
+    public List<string> Bodies { get; set; } = new();
+
     /// <summary> Option groups whose options change files of this part (the only ones worth showing for it). </summary>
     public List<string> Groups { get; set; } = new();
 

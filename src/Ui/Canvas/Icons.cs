@@ -65,6 +65,7 @@ public static class Icons
     public const string OpenOutside = "ui.open";
     public const string Lock        = "ui.lock";
     public const string Attach      = "ui.attach";
+    public const string Filter      = "ui.filter";
     public const string Unlock      = "ui.unlock";
 
     private static readonly Dictionary<string, string> Paths = new(StringComparer.Ordinal)
@@ -122,6 +123,7 @@ public static class Icons
         [Move]        = "M5 12h12M13 7l5 5-5 5",
         [Question]    = "M3.5 12a8.5 8.5 0 1 0 17 0a8.5 8.5 0 1 0-17 0M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17v.5",
         [OpenOutside] = "M13 4h7v7M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5",
+        [Filter]      = "M4 5.5h16l-6.2 7.2v5.8l-3.6-1.8v-4z",
         [Attach]      = "M3 5.5h10v13H3zM21 12h-5.5M18.5 9l-3 3 3 3",
         [Lock]        = "M6.5 11h11a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19v-6.5A1.5 1.5 0 0 1 6.5 11zM8 11V7.5a4 4 0 0 1 8 0V11M12 14.5v2.5",
         [Unlock]      = "M6.5 11h11a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19v-6.5A1.5 1.5 0 0 1 6.5 11zM8 11V7.5a4 4 0 0 1 7.8-1.3M12 14.5v2.5",
