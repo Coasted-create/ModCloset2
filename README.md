@@ -45,14 +45,6 @@ about half a minute.
   photos yet.
 - `/closet2 rescan` reads your mods again. `/closet2 debug` opens a plain fallback window.
 
-## Build
-
-`dotnet build ModCloset2.csproj -c Release` on Windows with XIVLauncher installed (Dalamud's files are taken from
-`%AppData%\XIVLauncher\addon\Hooks\dev`), or set `DALAMUD_HOME` to a folder that holds them.
-
-The tests and tools are not in this repository yet: they still depend on sample mods by other authors that cannot be
-published.
-
 ## Credits and licence
 
 Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). Mod Closet 2 is not affiliated with Penumbra, Glamourer,
