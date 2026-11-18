@@ -600,5 +600,8 @@
   "Off hand slot": "Platz: Nebenhand",
   "Slot: {0}": "Platz: {0}",
   "All slots": "Alle Plätze",
-  "Options: {0}": "Optionen: {0}"
+  "Options: {0}": "Optionen: {0}",
+  "Moving mods between shelves is locked. Click to unlock.": "Das Verschieben von Mods zwischen Fächern ist gesperrt. Zum Entsperren klicken.",
+  "Mods can be dragged onto another shelf. Click to lock.": "Mods lassen sich in ein anderes Fach ziehen. Zum Sperren klicken.",
+  "Unlock to move mods to another shelf": "Entsperren, um Mods in ein anderes Fach zu ziehen"
 }

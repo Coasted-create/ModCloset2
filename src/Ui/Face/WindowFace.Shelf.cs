@@ -795,8 +795,14 @@ public sealed partial class WindowFace
 
         var id   = "card/" + card.Key;
         var resp = _ui.Interact(id, r);
+        // a card lifts to be dropped on another shelf only while moves are unlocked; locked, a drag says where the lock is
         if (card.Key.Socket != Socket.None)
-            _ui.DragSource(id, card);
+        {
+            if (!_s.MovesLocked)
+                _ui.DragSource(id, card);
+            else if (_ui.DragRefused(id))
+                RefusedDrag();
+        }
         if (_ui.Drag?.SourceId == id)
         {
             // the card has lifted: its place stays as a quiet outline

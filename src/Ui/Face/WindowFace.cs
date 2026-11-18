@@ -32,6 +32,9 @@ public sealed class FaceStats
     public bool TakingOff { get; set; }
     public bool BusyShown { get; set; }
     public int UnsureMarks { get; set; }
+
+    /// <summary> How often a card was dragged while moves were locked (each drag once): the lock hint showed. </summary>
+    public int LockHints { get; set; }
     public bool ToastShown { get; set; }
     public int SortRowsDrawn { get; set; }
 
@@ -206,6 +209,7 @@ public sealed partial class WindowFace
 
         DrawPopups();
         DrawDragGhost();
+        DrawLockHint();
         Keys();
 
         // every frame: is the mouse over the cards (or the To sort list)? While it is, nothing jumps shelves there
@@ -345,8 +349,10 @@ public sealed partial class WindowFace
         var sw    = FaceSwitch(new Rect(right - P(100), cy - P(18), P(100), P(36)), 30);
         right = sw.X - P(14);
         var settings = new Rect(right - P(36), cy - P(18), P(36), P(36));
-        var undo     = new Rect(settings.X - P(10) - P(36), settings.Y, P(36), P(36));
+        var lockBox  = new Rect(settings.X - P(10) - P(36), settings.Y, P(36), P(36));
+        var undo     = new Rect(lockBox.X - P(10) - P(36), settings.Y, P(36), P(36));
         SettingsButton(settings);
+        LockButton(lockBox);
         UndoButton(undo);
         var lead = undo;
         if (_s.Looks is not null)
@@ -372,8 +378,10 @@ public sealed partial class WindowFace
         var sw    = FaceSwitch(new Rect(right - P(84), cy - P(17), P(84), P(34)), 25);
         right = sw.X - P(8);
         var settings = new Rect(right - P(34), cy - P(17), P(34), P(34));
-        var undo     = new Rect(settings.X - P(6) - P(34), settings.Y, P(34), P(34));
+        var lockBox  = new Rect(settings.X - P(6) - P(34), settings.Y, P(34), P(34));
+        var undo     = new Rect(lockBox.X - P(6) - P(34), settings.Y, P(34), P(34));
         SettingsButton(settings);
+        LockButton(lockBox);
         UndoButton(undo);
         if (_s.Looks is not null)
         {
@@ -451,6 +459,65 @@ public sealed partial class WindowFace
         // a Keep, Put back or Undo still waiting for the game: nothing to undo until it is done
         if (Painter.IconButton(_ui, "undo", r, Icons.Undo, Loc.T("Undo the last change"), CanUndoNow, false, "Ctrl", "Z").Clicked)
             _s.Undo();
+    }
+
+    /// <summary>
+    /// The lock beside Undo: while closed (the default), cards cannot be dragged onto another shelf, so nothing lands on
+    /// a wrong shelf by accident ("Move to…" in the card menu still moves). Open, in the accent, while moves are free.
+    /// It is outlined while the hint after a refused drag shows, so the user finds it.
+    /// </summary>
+    private void LockButton(Rect r)
+    {
+        Stats.Places["lock"] = r;
+        var locked = _s.MovesLocked;
+        var tip    = locked ? Loc.T("Moving mods between shelves is locked. Click to unlock.") : Loc.T("Mods can be dragged onto another shelf. Click to lock.");
+        if (Painter.IconButton(_ui, "lock", r, locked ? Icons.Lock : Icons.Unlock, tip, true, !locked).Clicked)
+        {
+            _s.MovesLocked = !locked;
+            _lockHintUntil = -1;
+        }
+
+        if (LockHintShown)
+            _c.StrokeRect(r.Expand(P(2)), Theme.Accent, P(11), P(2));
+    }
+
+    private double  _lockHintUntil = -1;
+    private Vector2 _lockHintAt;
+
+    private bool LockHintShown
+        => _ui.Refusing || _ui.Time < _lockHintUntil;
+
+    /// <summary> A card was dragged while moves are locked: say once, by the cursor, where to unlock. </summary>
+    private void RefusedDrag()
+    {
+        Stats.LockHints++;
+        _lockHintUntil = _ui.Time + 2.5;
+    }
+
+    /// <summary> The hint by the cursor after a refused drag: "Unlock to move mods to another shelf". </summary>
+    private void DrawLockHint()
+    {
+        if (!LockHintShown)
+            return;
+        if (_ui.Refusing)
+            _lockHintAt = _ui.Mouse;
+        var text = Loc.T("Unlock to move mods to another shelf");
+        var w    = P(12) + P(14) + P(8) + _c.Measure(text, Theme.Caption).X + P(12);
+        var h    = P(32);
+        var b    = _c.Bounds;
+        var x    = Math.Clamp(_lockHintAt.X + P(14), b.X + P(8), b.Right - w - P(8));
+        var y    = _lockHintAt.Y + P(20);
+        if (y + h > b.Bottom - P(8))
+            y = _lockHintAt.Y - h - P(12);
+        var box = new Rect(x, y, w, h);
+        Stats.Places["lock-hint"] = box;
+        _ui.BeginOverlay();
+        Painter.Shadow(_c, box, P(8), _u, 10, 4, 0.35f);
+        _c.FillRect(box, Theme.Raised, P(8));
+        _c.StrokeRect(box, Theme.Accent, P(8), Math.Max(1, _u));
+        Painter.Icon(_c, Icons.Lock, new Vector2(box.X + P(12) + P(7), box.Center.Y), P(14), Theme.Accent, 1.8f);
+        Painter.TextIn(_c, new Rect(box.X + P(12) + P(14) + P(8), box.Y, w, h), text, Theme.Caption, Theme.Text);
+        _ui.EndOverlay();
     }
 
     private bool _settingsAsked;

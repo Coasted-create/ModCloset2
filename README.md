@@ -4,7 +4,7 @@ Your [Penumbra](https://github.com/xivdev/Penumbra) mods as a closet. Mod Closet
 FINAL FANTASY XIV that sorts your mods onto shelves by what they are on you (tops, shoes, earrings, tails, nails…),
 lets you try one on with a click, and keeps it only when you say so.
 
-> **Status: test build (0.7.4).** It has been used on one large mod library. Expect rough edges, and please report them.
+> **Status: test build (0.7.5).** It has been used on one large mod library. Expect rough edges, and please report them.
 
 ## What it does
 
@@ -13,6 +13,8 @@ lets you try one on with a click, and keeps it only when you say so.
   closet remembers.
 - **Try on, Keep, Put back.** A click tries a mod on over your look. Keep makes it stay, Put back ends the try, Undo
   takes the last step back. Nothing is kept until you say so.
+- **Moving is locked.** The lock beside Undo stops a mod from being dragged onto a wrong shelf by accident; click it
+  to drag mods freely. Move to… in a card's menu always works.
 - **Mod options before Keep.** A mod's options show at the top while you try it, so you can pick the right face,
   tail or size before you keep it.
 - **Bodies, skin and makeup apart.** Body mods, skin textures, face sculpts and makeup each have their own shelf; a

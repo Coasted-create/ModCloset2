@@ -150,6 +150,7 @@ public sealed class Gui
 
         if (In.Released[0] || !In.Down[0])
         {
+            _refused   = null;
             _pressed   = null;
             _thumbDrag = null;
             Drag       = null;
@@ -232,7 +233,7 @@ public sealed class Gui
             _pressRect = r;
         }
 
-        var clicked = hovered && _pressed == id && In.Released[0] && Drag is null;
+        var clicked = hovered && _pressed == id && In.Released[0] && Drag is null && _refused != id;
         var right   = hovered && In.Pressed[1];
         var dbl     = hovered && In.DoubleClicked;
         var held    = _pressed == id && In.Down[0];
@@ -250,6 +251,26 @@ public sealed class Gui
         Drag = new DragState { SourceId = id, Payload = payload, GrabOffset = _pressPos - _pressRect.Min };
         return true;
     }
+
+    /// <summary>
+    /// A drag that is not allowed (moves are locked): true once, on the frame a held thing would have lifted. Nothing
+    /// lifts, and letting go then is no click either.
+    /// </summary>
+    public bool DragRefused(string id)
+    {
+        if (Drag is not null || _refused is not null || _pressed != id || !In.Down[0] || Blocked)
+            return false;
+        if (Vector2.Distance(Mouse, _pressPos) < DragThreshold * U)
+            return false;
+        _refused = id;
+        return true;
+    }
+
+    /// <summary> A refused drag is still held. </summary>
+    public bool Refusing
+        => _refused is not null;
+
+    private string? _refused;
 
     /// <summary> A place a dragged thing can be dropped: whether it is over it, and whether it was let go there. </summary>
     public (bool Over, bool Dropped) DropTarget(Rect r)

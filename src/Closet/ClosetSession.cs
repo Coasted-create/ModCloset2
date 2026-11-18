@@ -3550,6 +3550,21 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
 
     private PendingSuggestion? _suggestion;
 
+    /// <summary> Dragging cards to shelves is locked unless the user unlocked it (remembered with the closet's data). </summary>
+    public bool MovesLocked
+    {
+        get => !_data.MovesUnlocked;
+        set
+        {
+            if (value == !_data.MovesUnlocked)
+                return;
+            _data.MovesUnlocked = !value;
+            _save();
+            Changed();
+        }
+    }
+
+    /// <summary> Moves a card to a shelf; allowed while dragging is locked (the card menu is a deliberate choice). </summary>
     public void Move(PartKey part, string piece)
     {
         Sync();

@@ -113,6 +113,12 @@ public sealed class ClosetData
     /// <summary> The user turned photos of pieces off (on unless they did). </summary>
     public bool PhotosOff { get; set; }
 
+    /// <summary>
+    /// The user unlocked dragging cards onto shelves (locked unless they did: a settings file without it, a new user's or
+    /// one from before the lock, reads locked).
+    /// </summary>
+    public bool MovesUnlocked { get; set; }
+
     /// <summary> Mods the closet made of one thing of another mod: new mod's folder → where it came from. </summary>
     public Dictionary<string, OwnCopy> Copies { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 

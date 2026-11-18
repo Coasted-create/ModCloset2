@@ -406,6 +406,13 @@ public interface IClosetSession
 
     // ---- sorting ----
 
+    /// <summary>
+    /// Dragging cards onto another shelf is locked (the default, so a mod is not pulled onto a wrong shelf by accident).
+    /// Faces then start no drag of a card to a shelf; the card's menu ("Move to…") still moves it, being a deliberate
+    /// choice. The user unlocks it with the lock button; it is remembered across sessions. Setting it bumps Version.
+    /// </summary>
+    bool MovesLocked { get => false; set { } }
+
     void Move(PartKey part, string piece);
     void PutBackWhereDetected(PartKey part);
     void Hide(PartKey part);
