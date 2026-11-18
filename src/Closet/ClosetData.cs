@@ -119,6 +119,12 @@ public sealed class ClosetData
     /// </summary>
     public bool MovesUnlocked { get; set; }
 
+    /// <summary>
+    /// The user shows cards that are nothing to wear (animations, effects, sounds, interface, mounts and minions, world
+    /// and helper files). Off unless they turned it on (a settings file without it reads off).
+    /// </summary>
+    public bool ShowUnwearable { get; set; }
+
     /// <summary> Mods the closet made of one thing of another mod: new mod's folder → where it came from. </summary>
     public Dictionary<string, OwnCopy> Copies { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 

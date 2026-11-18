@@ -566,4 +566,12 @@ public interface IClosetSession
     void SetPhotos(bool on)
     {
     }
+
+    /// <summary>
+    /// The user's switch (Settings) for cards that are nothing to wear: animations, effects, sounds, interface, mounts
+    /// and minions, world files, helper files (the kinds on Everything else; a mod's wearable parts keep their cards
+    /// either way). False (the default): such cards are not shown anywhere, not counted in the rail, and not searched.
+    /// True: shown on Everything else as before. Remembered across sessions; setting it bumps Version.
+    /// </summary>
+    bool ShowUnwearable { get => true; set { } }
 }

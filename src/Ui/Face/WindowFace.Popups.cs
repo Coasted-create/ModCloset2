@@ -291,8 +291,16 @@ public sealed partial class WindowFace
             });
             if (photos.Working && photos.On)
                 items.Add(MenuItem.Note(Loc.T("Taking photos…")));
-            items.Add(MenuItem.Separator());
         }
+
+        // cards that are nothing to wear (animations, effects…): hidden unless the user wants them
+        items.Add(new MenuItem("unwearable", Loc.T("Show animations, effects and other files"))
+        {
+            Checked  = _s.ShowUnwearable,
+            KeepOpen = true,
+        });
+        items.Add(MenuItem.Note(Loc.T("They are nothing to wear; they sit on Everything else.")));
+        items.Add(MenuItem.Separator());
 
         items.Add(new MenuItem("rescan", Loc.T("Read my mods again")));
         items.Add(new MenuItem("census", Loc.T("Write the census file")));
@@ -309,6 +317,8 @@ public sealed partial class WindowFace
             _s.Remember(KeyOnYou, picked.Id[4..]);
         else if (picked.Id == "photos" && _s.Photos is { } now)
             _s.SetPhotos(!now.On);
+        else if (picked.Id == "unwearable")
+            _s.ShowUnwearable = !_s.ShowUnwearable;
         else if (picked.Id == "rescan")
             _s.Rescan();
         else if (picked.Id == "census")

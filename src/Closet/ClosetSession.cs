@@ -835,6 +835,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         _waitingSet.Clear();
         _notWorn.Clear();
         _aside.Clear();
+        _unwearable.Clear();
         _leadOf.Clear();
         _thingParts.Clear();
         _outfits.Clear();
@@ -924,6 +925,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     private void Unplace(PartKey key)
     {
         _placeStamp++;
+        _unwearable.Remove(key);
         if (_shelfOf.Remove(key, out var shelf))
             BucketOf(shelf).Remove(key);
         if (_waitingSet.Remove(key))
@@ -967,6 +969,15 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
 
         _byKey[part.Key]   = part;
         _shelfOf[part.Key] = shelf;
+
+        // nothing to wear (an animation, a sound…) while the user does not show those: no card anywhere, no count, not
+        // searched, never on To sort; still known (the looks wear a mod as a whole), and on Hidden when the user hid it
+        if (Unwearable(part) && !_data.ShowUnwearable && shelf != Pieces.Hidden)
+        {
+            _unwearable.Add(part.Key);
+            _notWorn[part.Key] = part;
+            return;
+        }
 
         // a thing that is a mod of its own now: no card of its own here (unless it is on or tried on: see AsideShown)
         if (_copiedTo.ContainsKey(part.Key))
@@ -1189,7 +1200,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
 
         _onByShelf = new Dictionary<string, List<LibPart>>();
         foreach (var key in _on)
-            if (_byKey.TryGetValue(key, out var onPart) && _shelfOf.TryGetValue(key, out var onShelf))
+            if (_byKey.TryGetValue(key, out var onPart) && _shelfOf.TryGetValue(key, out var onShelf) && !_unwearable.Contains(key))
             {
                 if (!_onByShelf.TryGetValue(onShelf, out var list))
                     _onByShelf[onShelf] = list = new List<LibPart>();
@@ -1647,7 +1658,31 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         => _lastSearchMs;
 
     private bool Hit(LibPart part)
-        => !_aside.ContainsKey(part.Key) && Matches(part);
+        => !_aside.ContainsKey(part.Key) && !_unwearable.Contains(part.Key) && Matches(part);
+
+    /// <summary> Parts left out while the user does not show what is nothing to wear (<see cref="ShowUnwearable"/>). </summary>
+    private readonly HashSet<PartKey> _unwearable = new();
+
+    /// <summary>
+    /// Nothing to wear: a part of no gear slot or body part (Penumbra's "everything else": animations, effects, sounds,
+    /// interface, mounts and minions, world and helper files). Weapons are worn, and so is every other socket.
+    /// </summary>
+    private static bool Unwearable(LibPart part)
+        => part.Key.Socket == Socket.Other;
+
+    public bool ShowUnwearable
+    {
+        get => _data.ShowUnwearable;
+        set
+        {
+            if (value == _data.ShowUnwearable)
+                return;
+            _data.ShowUnwearable = value;
+            _save();
+            // every part is placed again: those cards come or go everywhere at once (shelves, counts, search, To sort)
+            Changed(membership: true);
+        }
+    }
 
     private bool Matches(LibPart part)
         => _shelfOf.TryGetValue(part.Key, out var shelf) && shelf != Pieces.Hidden && SearchText.Matches(_hitsWords, Haystacks()[part.Key]);

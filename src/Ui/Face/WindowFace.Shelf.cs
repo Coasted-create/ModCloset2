@@ -550,6 +550,11 @@ public sealed partial class WindowFace
                 Message(area, Loc.F("Nothing found for “{0}”.", _s.Search), Loc.T("Try fewer or shorter words."), Icons.Search, Theme.Muted);
             else if (_s.Selected == Pieces.Hidden)
                 Message(area, Loc.T("Nothing is hidden."), string.Empty, Icons.Hidden, Theme.Muted);
+            else if (_s.Selected == Pieces.Other && !_s.ShowUnwearable)
+            {
+                Stats.Places["unwearable-hidden"] = area;
+                Message(area, Loc.T("Animations, effects and other files are hidden. Settings can show them."), string.Empty, Icons.Other, Theme.Muted);
+            }
             else
                 Message(area, Loc.T("Nothing on this shelf yet."), string.Empty, _s.Selected, Theme.Muted);
             return;

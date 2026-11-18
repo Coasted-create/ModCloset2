@@ -4,7 +4,7 @@ Your [Penumbra](https://github.com/xivdev/Penumbra) mods as a closet. Mod Closet
 FINAL FANTASY XIV that sorts your mods onto shelves by what they are on you (tops, shoes, earrings, tails, nails…),
 lets you try one on with a click, and keeps it only when you say so.
 
-> **Status: test build (0.7.9).** It has been used on one large mod library. Expect rough edges, and please report them.
+> **Status: test build (0.7.10).** It has been used on one large mod library. Expect rough edges, and please report them.
 
 ## What it does
 
@@ -36,6 +36,8 @@ lets you try one on with a click, and keeps it only when you say so.
 - **On you.** Point at a part of your character to flip through that shelf.
 - **Make it its own mod.** Copy one piece out of a big mod into a new mod of its own. The mod it comes from is not
   changed.
+- **Only things to wear.** Animations, effects, sounds and other files that are nothing to wear are hidden; a switch in
+  Settings shows them on Everything else.
 - **Three shapes.** A wide window, a slim one, and On you. English and German.
 
 ## Requirements
