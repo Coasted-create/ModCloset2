@@ -45,10 +45,6 @@ about half a minute.
   photos yet.
 - `/closet2 rescan` reads your mods again. `/closet2 debug` opens a plain fallback window.
 
-## What it does not do
-
-It does not copy other players' looks or colours, and it does not download or share mods.
-
 ## Build
 
 `dotnet build ModCloset2.csproj -c Release` on Windows with XIVLauncher installed (Dalamud's files are taken from
