@@ -10,7 +10,7 @@ namespace ModCloset2.Detect;
 public sealed class ModFacts
 {
     /// <summary> Bumped when the reader starts collecting different facts (old census lines are then not comparable). </summary>
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -76,6 +76,13 @@ public sealed class PartFacts
 
     /// <summary> Race codes of the part's paths (from models when it has any). </summary>
     public List<int> RaceCodes { get; set; } = new();
+
+    /// <summary>
+    /// Race codes whose models are copies of another race's (version 5 on): race code → the code it copies (a c1101
+    /// model byte for byte the c0101 one → 1101: 101). The game would draw that race with the copy, so the part is not
+    /// made for it. Empty: every race's model is its own, or the reader did not check (older facts).
+    /// </summary>
+    public Dictionary<int, int> RaceCopies { get; set; } = new();
 
     /// <summary> Meta edit types that point at this socket ("eqp", "imc"…). </summary>
     public List<string> Metas { get; set; } = new();

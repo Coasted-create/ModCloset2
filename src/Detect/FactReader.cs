@@ -267,6 +267,7 @@ public static partial class FactReader
             cancel.ThrowIfCancellationRequested();
             acc.Facts.HasModel = true;
             ReadModel(source, acc, def, hints, materialShader, facts);
+            acc.Facts.RaceCopies = RaceCopies(source, acc);
         }
 
         // ---- files at custom paths: they belong to the part whose materials or model name them
@@ -348,6 +349,62 @@ public static partial class FactReader
         facts.BytesRead    = source.BytesRead;
         facts.Milliseconds = Math.Round(watch.Elapsed.TotalMilliseconds, 1);
         return facts;
+    }
+
+    /// <summary>
+    /// Which races' models are copies of another race's: a mod that replaces every race variant of an item often puts the
+    /// Midlander model (c0101 / c0201) at the Lalafell paths too, so the game draws a Lalafell with it. A race's models
+    /// are a copy when every one of them is the same file (same path in the mod, or the same bytes) as one of the
+    /// Midlander model of its gender, or for Hrothgar of the Roegadyn's. Files of the same length are compared by their
+    /// bytes while the reading budget lasts; past it, the same length counts as the same file.
+    /// </summary>
+    private static Dictionary<int, int> RaceCopies(ModSource source, Acc acc)
+    {
+        var copies = new Dictionary<int, int>();
+        var byRace = acc.Models.Where(m => m.Race > 0 && m.Local.Length > 0)
+            .GroupBy(m => m.Race).ToDictionary(g => g.Key, g => g.Select(m => ModSource.Normalize(m.Local).ToLowerInvariant()).Distinct().ToList());
+        if (byRace.Count < 2)
+            return copies;
+
+        var hashes = new Dictionary<string, string?>(StringComparer.Ordinal);
+        string? Hash(string local)
+        {
+            if (hashes.TryGetValue(local, out var h))
+                return h;
+            var length = source.Length(local);
+            h = null;
+            if (length >= 0 && source.BytesRead + length <= Tuning.MaxModBytes && source.Read(local, Tuning.MaxModelBytes) is { } bytes)
+                h = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(bytes));
+            hashes[local] = h;
+            return h;
+        }
+
+        bool Same(string a, string b)
+        {
+            if (a == b)
+                return true;
+            var la = source.Length(a);
+            if (la < 0 || la != source.Length(b))
+                return false;
+            var (ha, hb) = (Hash(a), Hash(b));
+            return ha is null || hb is null || ha == hb; // past the budget: the same length is taken for the same file
+        }
+
+        foreach (var (race, locals) in byRace)
+        {
+            var male = race / 100 % 2 == 1;
+            var bases = new List<int> { male ? 101 : 201 };
+            if (race / 100 is 15 or 16)
+                bases.Add(male ? 901 : 1001); // Hrothgar from the Roegadyn
+            foreach (var b in bases)
+                if (b != race && byRace.TryGetValue(b, out var baseLocals) && locals.All(l => baseLocals.Any(x => Same(l, x))))
+                {
+                    copies[race] = b;
+                    break;
+                }
+        }
+
+        return copies;
     }
 
     /// <summary> Every option with its group index (-1 for the default data), option index and whether it is on by default. </summary>

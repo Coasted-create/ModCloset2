@@ -134,6 +134,7 @@ public static partial class Decision
         JoinSculptTextures(result, facts);
         OneThingOneAnswer(result);
         foreach (var p in result.Parts) p.Bodies = BodiesFor(facts, result, p);
+        foreach (var p in result.Parts) ApplyRaces(facts, result, p);
         return result;
     }
 
@@ -226,6 +227,132 @@ public static partial class Decision
         var sources = facts.Parts.Where(f => f.Socket == part.Socket
             || part.Socket == Socket.BodyBase && GamePaths.IsGear(f.Socket) && result.Parts.All(r => r.Socket != f.Socket));
         return BodyMods.InAll(sources.SelectMany(f => f.Texts).Where(t => t.Source != "material").Select(t => t.Text).Append(facts.Name).Concat(facts.Tags));
+    }
+
+    // ------------------------------------------------------------------ races
+
+    private static readonly string[] RaceNames =
+        { "", "Midlander", "Highlander", "Elezen", "Miqo'te", "Roegadyn", "Lalafell", "Au Ra", "Hrothgar", "Viera" };
+
+    /// <summary> The race (1 Midlander … 9 Viera) of a game race code (0201 → 1; NPC codes like 0104 too). </summary>
+    public static int RaceOf(int code)
+        => code / 100 is var g and >= 1 and <= 18 ? (g + 1) / 2 : 0;
+
+    private static bool IsMale(int code)
+        => code / 100 % 2 == 1;
+
+    private static int Code(int race, bool male)
+        => ((race - 1) * 2 + (male ? 1 : 2)) * 100 + 1;
+
+    // Words that name a race, by race number; "au ra" and the two Miqo'te clans' phrases are read as phrases.
+    private static readonly Dictionary<string, int> RaceWords = new(StringComparer.Ordinal)
+    {
+        ["hyur"] = 1, ["midlander"] = 1, ["midlanders"] = 1, ["highlander"] = 2, ["highlanders"] = 2, ["elezen"] = 3,
+        ["miqo"] = 4, ["miqote"] = 4, ["miqotes"] = 4, ["roegadyn"] = 5, ["roe"] = 5, ["lala"] = 6, ["lalafell"] = 6, ["lalafells"] = 6,
+        ["aura"] = 7, ["xaela"] = 7, ["raen"] = 7, ["hrothgar"] = 8, ["hroth"] = 8, ["viera"] = 9, ["vieras"] = 9,
+    };
+
+    private static readonly string[][] RacePhrases =
+    {
+        new[] { "au", "ra" }, new[] { "seeker", "of", "the", "sun" }, new[] { "keeper", "of", "the", "moon" },
+    };
+
+    private static readonly int[] PhraseRaces = { 7, 4, 4 };
+
+    private static readonly string[][] AllRacesPhrases =
+    {
+        new[] { "all", "races" }, new[] { "all", "race" }, new[] { "any", "race" }, new[] { "every", "race" }, new[] { "allraces" },
+    };
+
+    /// <summary> The races the texts name (and the word that named the first), and whether they say "all races". </summary>
+    public static (SortedSet<int> Races, string Word, bool All) RacesNamed(IEnumerable<string> texts)
+    {
+        var races = new SortedSet<int>();
+        var word = string.Empty;
+        var all = false;
+        foreach (var text in texts)
+        {
+            var tokens = System.Text.RegularExpressions.Regex.Split(text.ToLowerInvariant().Replace("'", ""), "[^a-z0-9]+").Where(t => t.Length > 0).ToArray();
+            bool At(int i, string[] phrase)
+                => i + phrase.Length <= tokens.Length && phrase.Select((w, k) => tokens[i + k] == w).All(x => x);
+            for (var i = 0; i < tokens.Length; ++i)
+            {
+                if (AllRacesPhrases.Any(ph => At(i, ph)))
+                    all = true;
+                for (var k = 0; k < RacePhrases.Length; ++k)
+                    if (At(i, RacePhrases[k]) && races.Add(PhraseRaces[k]) && word.Length == 0)
+                        word = string.Join(" ", RacePhrases[k]);
+                if (RaceWords.TryGetValue(tokens[i], out var r) && races.Add(r) && word.Length == 0)
+                    word = tokens[i];
+            }
+        }
+
+        return (races, word, all);
+    }
+
+    /// <summary>
+    /// The races a part is made for (its race codes, the closet's Race filter), with the why-panel's lines:
+    /// a race whose model is a copy of another race's (a Lalafell model that is the Midlander one) is not one of them;
+    /// a race the mod's name, tags, the user's folder or the part's option names name decides alone (both genders as
+    /// the models have them), unless they also say "all races". Weapons and Everything else carry none.
+    /// </summary>
+    private static void ApplyRaces(ModFacts facts, ModDetection result, PartInfo part)
+    {
+        if (part.Socket is Socket.Other or Socket.MainHand or Socket.OffHand)
+            return;
+
+        var sources = facts.Parts.Where(f => f.Socket == part.Socket
+            || part.Socket == Socket.BodyBase && GamePaths.IsGear(f.Socket) && result.Parts.All(r => r.Socket != f.Socket)).ToList();
+        var codes = part.RaceCodes.ToList();
+
+        // Copies: what the reader found (facts version 5 on); older facts only show which races have models, and there
+        // a Lalafell or Hrothgar model beside the Midlander (or Roegadyn) one of its gender is taken for a copy.
+        var copies = new Dictionary<int, int>();
+        if (facts.Version >= 5)
+        {
+            foreach (var f in sources)
+                foreach (var (race, of) in f.RaceCopies)
+                    copies.TryAdd(race, of);
+        }
+        else
+        {
+            foreach (var c in codes.Where(c => RaceOf(c) is 6 or 8))
+            {
+                var bases = RaceOf(c) == 8 ? new[] { Code(1, IsMale(c)), Code(5, IsMale(c)) } : new[] { Code(1, IsMale(c)) };
+                if (bases.FirstOrDefault(codes.Contains) is var b and > 0)
+                    copies[c] = b;
+            }
+        }
+
+        foreach (var (race, of) in copies.OrderBy(kv => kv.Key))
+            if (codes.Remove(race))
+                part.Evidence.Add(new Evidence
+                {
+                    Kind  = EvidenceKind.Slot,
+                    Value = facts.Version >= 5
+                        ? $"{RaceNames[RaceOf(race)]} model is a copy of the {RaceNames[RaceOf(of)]} one"
+                        : $"{RaceNames[RaceOf(race)]} model taken for a copy of the {RaceNames[RaceOf(of)]} one",
+                });
+
+        // Race words of the whole mod or of the part's options decide.
+        var texts = sources.SelectMany(f => f.Texts).Where(t => t.Source is not ("file" or "material")).Select(t => t.Text)
+            .Append(facts.Name).Concat(facts.Tags).Append(facts.SortFolder);
+        var (named, word, all) = RacesNamed(texts);
+        if (named.Count > 0 && !all)
+        {
+            var genders = part.RaceCodes.Select(IsMale).Distinct().ToList();
+            if (genders.Count == 0)
+                genders = new List<bool> { true, false };
+            codes = named.SelectMany(r => genders.Select(m => Code(r, m))).Distinct().Order().ToList();
+            part.Evidence.Add(new Evidence
+            {
+                Kind  = EvidenceKind.Words,
+                Value = $"says “{word}”: made for {string.Join(", ", named.Select(r => RaceNames[r]))}",
+                Word  = word,
+            });
+        }
+
+        part.RaceCodes = codes;
     }
 
     /// <summary> The connected groups (two or more) of parts that a relation links. </summary>

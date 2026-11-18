@@ -49,10 +49,12 @@ public sealed partial class ClosetSession
 
     /// <summary>
     /// The races a part's model of one race code is worn by, as bits of <see cref="RaceIds"/>: its own race (male, female
-    /// and the children's models together; Highlander is Hyur), and for the Midlander models (101, 201) also Elezen,
-    /// Miqo'te and Au Ra, whose bodies are the Midlander one and get it drawn unchanged. Lalafell, Roegadyn, Hrothgar and
-    /// Viera wear only their own: the game's last fallback to Midlander does not fit them (a Rue top is not for a Lalafell).
-    /// 0 for codes of no player race. The one table the race chips and <see cref="Card.Races"/> go by.
+    /// and the children's models together; Highlander is Hyur), and the races that share its body:
+    /// - the Midlander models (101, 201): also Elezen, Miqo'te, Au Ra and Viera, whose bodies are the Midlander one (the
+    ///   body mods Rue, Bibo+, YAB fit them all);
+    /// - the Roegadyn models (901, 1001): also Hrothgar, who wear the Roegadyn body.
+    /// Lalafell wear only their own: the game's last fallback to Midlander does not fit them (a Rue top is not for a
+    /// Lalafell). 0 for codes of no player race. The one table the race chips and <see cref="Card.Races"/> go by.
     /// </summary>
     public static int RaceMaskOfCode(int code)
     {
@@ -60,7 +62,9 @@ public sealed partial class ClosetSession
             return 0;
         var mask = 1 << own;
         if (code is 101 or 201)
-            mask |= 1 << 1 | 1 << 3 | 1 << 5; // Elezen, Miqo'te, Au Ra
+            mask |= 1 << 1 | 1 << 3 | 1 << 5 | 1 << 7; // Elezen, Miqo'te, Au Ra, Viera
+        else if (code is 901 or 1001)
+            mask |= 1 << 6;                            // Hrothgar
         return mask;
     }
 

@@ -372,8 +372,12 @@ public static class PartBuilder
         return GearSlots.NamesOf(socket).Select(n => GearSlots.IdOf(n)!.Value).ToArray();
     }
 
-    /// <summary> A copy of the detector's answer that the closet may adjust without touching the cached one. </summary>
-    private static PartInfo Clone(PartInfo p)
+    /// <summary>
+    /// A copy of the detector's answer that the closet may adjust without touching the cached one. Every field is copied:
+    /// a field left out never reaches the closet (0.7.8: <see cref="PartInfo.Bodies"/> and <see cref="PartInfo.Hands"/>
+    /// were, so the Body filter had nothing to show); LibraryTests checks each public field by reflection.
+    /// </summary>
+    public static PartInfo Clone(PartInfo p)
         => new()
         {
             Mod        = p.Mod,
@@ -387,7 +391,9 @@ public static class PartBuilder
             Signature  = p.Signature,
             TextureOnly = p.TextureOnly,
             RaceCodes  = p.RaceCodes.ToList(),
+            Bodies     = p.Bodies.ToList(),
             Groups     = p.Groups.ToList(),
             Models     = p.Models,
+            Hands      = p.Hands,
         };
 }
