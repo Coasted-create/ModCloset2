@@ -123,6 +123,9 @@ public enum SaveWhat : byte
 
 public interface ILooks
 {
+    /// <summary> The look sheet (second round); null in sessions without it. </summary>
+    ILookSheet? Sheet => null;
+
     /// <summary> Bumped whenever something a face shows of the looks has changed. </summary>
     int Version { get; }
 
@@ -177,4 +180,143 @@ public interface ILooks
     /// </summary>
     IReadOnlyList<Card> ReplacementsFor(Guid look, string piece);
     void Replace(Guid look, string piece, PartKey with);
+}
+
+// ── The look sheet (second round, docs/briefs/14-looks-2.md) ─────────────────────────────────────────────────────────
+
+/// <summary> What a look does with one thing it could keep. </summary>
+public enum Keep : byte
+{
+    /// <summary> The look does not touch it; whatever is there stays. </summary>
+    LeaveAlone,
+    /// <summary> The look sets it to its saved value. </summary>
+    Saved,
+    /// <summary> The look takes it off / empties it (pieces only). </summary>
+    Nothing,
+}
+
+/// <summary> One slot row of the look sheet. </summary>
+public sealed class SheetPiece
+{
+    /// <summary> The game slot (socket name: "head", "body", "mainhand" …), one row per outfit slot, in rail order. </summary>
+    public string Slot { get; init; } = string.Empty;
+    /// <summary> Translated slot name ("Body slot"). </summary>
+    public string SlotName { get; init; } = string.Empty;
+    public Keep Keep { get; init; }
+    /// <summary> The saved piece (null unless <see cref="Keep"/> is Saved). </summary>
+    public PartKey? Part { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public string? Picture { get; init; }
+    /// <summary> "Heel: high · Straps: on" — the saved options, as a short line. </summary>
+    public string Options { get; init; } = string.Empty;
+    /// <summary> The piece's saved colours (dye and painted areas), for chips; empty when none. </summary>
+    public IReadOnlyList<uint> Colours { get; init; } = Array.Empty<uint>();
+    public bool Missing { get; init; }
+    /// <summary> What is on in this slot now differs from the saved piece (while the look is on). </summary>
+    public bool Changed { get; init; }
+}
+
+/// <summary> One of the character's colours Glamourer knows. </summary>
+public sealed class SheetColour
+{
+    /// <summary> "skin", "hair", "highlights", "eyeLeft", "eyeRight", "lips", "facePaint", "tattoo". </summary>
+    public string Key { get; init; } = string.Empty;
+    /// <summary> Translated name. </summary>
+    public string Name { get; init; } = string.Empty;
+    /// <summary> Saved or LeaveAlone (never Nothing). </summary>
+    public Keep Keep { get; init; }
+    /// <summary> The saved colour (0xRRGGBB); when LeaveAlone, the one worn now, for the swatch. </summary>
+    public uint Rgb { get; init; }
+    /// <summary> The saved colour differs from the one worn now. </summary>
+    public bool Changed { get; init; }
+}
+
+/// <summary> One of the things Glamourer can show or hide. </summary>
+public sealed class SheetShowing
+{
+    /// <summary> "weapon", "hat", "visor". </summary>
+    public string Key { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    /// <summary> Saved or LeaveAlone. </summary>
+    public Keep Keep { get; init; }
+    /// <summary> Shown (weapon drawn, hat shown, visor down) or not. </summary>
+    public bool On { get; init; }
+    /// <summary> Translated words for the two states ("Shown"/"Sheathed", "Shown"/"Hidden", "Down"/"Up"). </summary>
+    public string OnWord { get; init; } = string.Empty;
+    public string OffWord { get; init; } = string.Empty;
+}
+
+/// <summary> A gearset or job the user can bind a look to. </summary>
+public sealed class BindChoice
+{
+    /// <summary> Gearset: its number (1-based) as a string; job: the job's abbreviation ("DNC"). </summary>
+    public string Id { get; init; } = string.Empty;
+    /// <summary> "3 · Gala DNC" for a gearset, the job's name for a job. </summary>
+    public string Name { get; init; } = string.Empty;
+    /// <summary> The look already bound to it, if another one ("already bound to Beach day"). </summary>
+    public string? BoundTo { get; init; }
+}
+
+/// <summary> How a look is worn by itself. </summary>
+public sealed class SheetBinding
+{
+    /// <summary> Gearset id (<see cref="BindChoice.Id"/>) or null. </summary>
+    public string? Gearset { get; init; }
+    public string? Job { get; init; }
+    /// <summary> A Glamourer design named after the look is kept up to date. </summary>
+    public bool GlamourerDesign { get; init; }
+    /// <summary> The design's name when <see cref="GlamourerDesign"/> ("Closet · Gala night"). </summary>
+    public string DesignName { get; init; } = string.Empty;
+    /// <summary> Why the design cannot be made (Glamourer missing, its IPC too old…), or "". </summary>
+    public string DesignProblem { get; init; } = string.Empty;
+    /// <summary> A quiet line under the design switch while the design is on and works ("Each Update makes the design anew …"), or "". </summary>
+    public string DesignNote { get; init; } = string.Empty;
+}
+
+/// <summary> Everything the look sheet shows for one look. </summary>
+public sealed class LookSheet
+{
+    public Guid Id { get; init; }
+    public string Name { get; init; } = string.Empty;
+    public bool OnNow { get; init; }
+    /// <summary> "You changed the shoes" while on and changed, else "". </summary>
+    public string ChangeText { get; init; } = string.Empty;
+    public IReadOnlyList<SheetPiece> Pieces { get; init; } = Array.Empty<SheetPiece>();
+    public IReadOnlyList<SheetColour> Colours { get; init; } = Array.Empty<SheetColour>();
+    public IReadOnlyList<SheetShowing> Showing { get; init; } = Array.Empty<SheetShowing>();
+    public SheetBinding Binding { get; init; } = new();
+}
+
+/// <summary> The look sheet: more of the character kept by a look, each thing a switch. All changes are undo steps. </summary>
+public interface ILookSheet
+{
+    /// <summary> The sheet of a look (pinned or lately); null for an unknown id. Bumps with <see cref="ILooks.Version"/>. </summary>
+    LookSheet? Sheet(Guid look);
+
+    /// <summary> A slot's rule. Saved takes the piece on in that slot now (or keeps the saved one when one is there). </summary>
+    void SetPiece(Guid look, string slot, Keep keep);
+
+    /// <summary> A character colour's rule; Saved takes the colour worn now when none was saved. </summary>
+    void SetColour(Guid look, string key, Keep keep);
+
+    /// <summary> Sets a saved colour by hand (0xRRGGBB); makes it Saved. </summary>
+    void SetColourValue(Guid look, string key, uint rgb);
+
+    /// <summary> Every Saved colour and showing takes what the character wears now. </summary>
+    void TakeMineNow(Guid look);
+
+    /// <summary> A showing's rule and value. </summary>
+    void SetShowing(Guid look, string key, Keep keep, bool on);
+
+    /// <summary> The gearsets of the character (from the game), in order, with what they are bound to. </summary>
+    IReadOnlyList<BindChoice> Gearsets { get; }
+
+    /// <summary> The jobs, in the game's order. </summary>
+    IReadOnlyList<BindChoice> Jobs { get; }
+
+    /// <summary> Binds the look (null unbinds). One look per gearset/job: the last one bound takes it over. </summary>
+    void Bind(Guid look, string? gearset, string? job);
+
+    /// <summary> Keep a Glamourer design named after the look up to date (made now, refreshed on Update). </summary>
+    void SetGlamourerDesign(Guid look, bool on);
 }

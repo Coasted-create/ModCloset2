@@ -130,6 +130,91 @@ public static class GlamourerState
     public static ulong ItemIn(JObject? state, string slot)
         => state?["Equipment"]?[slot]?["ItemId"] is JValue { Type: JTokenType.Integer } v ? Convert.ToUInt64(v.Value) : 0;
 
+    /// <summary>
+    /// The character's colours as Glamourer's parameters (the colour of the skin, hair, eyes… as its colour picker shows
+    /// them; the looks' key → Glamourer's parameter). The same table as <c>Looks.LookDesign.ParameterOf</c>.
+    /// </summary>
+    public static readonly (string Key, string Parameter)[] ColourParameters =
+    {
+        ("skin", "SkinDiffuse"), ("hair", "HairDiffuse"), ("highlights", "HairHighlight"), ("eyeLeft", "LeftEye"), ("eyeRight", "RightEye"),
+        ("lips", "LipDiffuse"), ("facePaint", "DecalColor"), ("tattoo", "FeatureColor"),
+    };
+
+    /// <summary> What can be shown or hidden: the looks' key → Glamourer's equipment entry and its value's name. </summary>
+    public static readonly (string Key, string Entry, string Value)[] Showings =
+    {
+        ("weapon", "Weapon", "Show"), ("hat", "Hat", "Show"), ("visor", "Visor", "IsToggled"),
+    };
+
+    /// <summary> The character's colours (0xRRGGBB) and showings in a Glamourer state; what the state does not have is left out. </summary>
+    public static (Dictionary<string, uint> Colours, Dictionary<string, bool> Showing) CharacterOf(JObject? state)
+    {
+        var colours = new Dictionary<string, uint>(StringComparer.Ordinal);
+        var showing = new Dictionary<string, bool>(StringComparer.Ordinal);
+        if (state?["Parameters"] is JObject parameters)
+            foreach (var (key, parameter) in ColourParameters)
+                if (parameters[parameter] is JObject p && Number(p["Red"]) is { } r && Number(p["Green"]) is { } g && Number(p["Blue"]) is { } b)
+                    colours[key] = Rgb(r, g, b);
+        if (state?["Equipment"] is JObject equipment)
+            foreach (var (key, entry, value) in Showings)
+                if (equipment[entry]?[value] is JValue { Type: JTokenType.Boolean } on)
+                    showing[key] = (bool)on.Value!;
+        return (colours, showing);
+    }
+
+    /// <summary>
+    /// A Glamourer state that sets only these colours and showings (every other entry is not applied; race, clan, gender
+    /// and body type are copied unapplied so Glamourer reads the parameters for the right body). A lip or face paint colour
+    /// keeps the strength it has now.
+    /// </summary>
+    public static JObject CharacterState(IReadOnlyDictionary<string, uint> colours, IReadOnlyDictionary<string, bool> showing, JObject? current)
+    {
+        var customize = new JObject();
+        var baseline  = current?["Customize"] as JObject;
+        if (baseline?["ModelId"] is { Type: JTokenType.Integer } model)
+            customize["ModelId"] = model.Value<uint>();
+        foreach (var key in Identity)
+            if (baseline?[key]?["Value"] is { Type: JTokenType.Integer } v)
+                customize[key] = new JObject { ["Value"] = v.Value<int>(), ["Apply"] = false };
+
+        var parameters = new JObject();
+        foreach (var (key, parameter) in ColourParameters)
+            if (colours.TryGetValue(key, out var rgb))
+            {
+                var entry = new JObject
+                {
+                    ["Red"]   = ((rgb >> 16) & 0xFF) / 255f,
+                    ["Green"] = ((rgb >> 8) & 0xFF) / 255f,
+                    ["Blue"]  = (rgb & 0xFF) / 255f,
+                    ["Apply"] = true,
+                };
+                if (current?["Parameters"]?[parameter]?["Alpha"] is { } alpha)
+                    entry["Alpha"] = alpha.DeepClone();
+                else if (parameter is "LipDiffuse" or "DecalColor")
+                    entry["Alpha"] = 1f;
+                parameters[parameter] = entry;
+            }
+
+        var equipment = new JObject();
+        foreach (var (key, entry, value) in Showings)
+            if (showing.TryGetValue(key, out var on))
+                equipment[entry] = new JObject { [value] = on, ["Apply"] = true };
+
+        var state = Wrap(equipment, customize);
+        state["Parameters"] = parameters;
+        return state;
+    }
+
+    private static float? Number(JToken? token)
+        => token is JValue { Type: JTokenType.Float or JTokenType.Integer } v ? Convert.ToSingle(v.Value) : null;
+
+    private static uint Rgb(float r, float g, float b)
+    {
+        static uint C(float v)
+            => (uint)Math.Clamp((int)MathF.Round(v * 255f), 0, 255);
+        return C(r) << 16 | C(g) << 8 | C(b);
+    }
+
     private static JObject Wrap(JObject equipment, JObject customize)
         => new()
         {

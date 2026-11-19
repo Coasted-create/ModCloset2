@@ -64,6 +64,9 @@ public sealed partial class Wardrobe
                 return check;
         }
 
+        // not while the game loads, and not in a frame where another call ran (the next frame then)
+        if (!_pace.Take(IpcWork.SlotCheck))
+            return check;
         FrameReport.Step("the slot check", check.Wanted.Count);
         if (_ipc.ResourceMap(PlayerIndex) is not { } map)
             return null;

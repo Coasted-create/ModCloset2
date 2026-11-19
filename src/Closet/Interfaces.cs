@@ -156,6 +156,21 @@ public interface IWardrobe
     /// <summary> The character's customize value now ("Hairstyle", "Face", "TailShape"), null when not known. </summary>
     int? CustomizeNow(string key);
 
+    /// <summary>
+    /// The character's colours and showings as Glamourer had them when what is on was last read (null: not known). A new
+    /// object whenever they changed.
+    /// </summary>
+    Looks.CharacterLook? CharacterNow
+        => null;
+
+    /// <summary>
+    /// The character's colours and showings the next tries and Keeps put on with their parts (a look's), null: none. A
+    /// try shows them until Put back; a Keep keeps them (one step with its parts).
+    /// </summary>
+    void WithCharacter(Looks.CharacterLook? character)
+    {
+    }
+
     /// <summary> Tries these parts on over the kept outfit, replacing what was tried before. Empty: puts back. </summary>
     void Preview(IReadOnlyList<TryRequest> parts);
 

@@ -10,7 +10,7 @@ namespace ModCloset2.Detect;
 public sealed class ModFacts
 {
     /// <summary> Bumped when the reader starts collecting different facts (old census lines are then not comparable). </summary>
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -57,7 +57,10 @@ public sealed class PartFacts
 {
     public Socket Socket { get; set; }
 
-    /// <summary> Other and weapon parts: what kind of files, by count ("animation" 91, "effect" 95…). </summary>
+    /// <summary>
+    /// Other and weapon parts: what kind of files, by count ("animation" 91, "effect" 95…; "weapon" and "prop" in a hand).
+    /// From version 6 on the off hand's weapon files are a part of their own (OffHand); before, all were MainHand.
+    /// </summary>
     public Dictionary<string, int> OtherKinds { get; set; } = new();
 
     /// <summary>

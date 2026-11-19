@@ -19,6 +19,8 @@ public sealed class ColourWorld : IColourWorld
     private readonly Func<int> _gameItemsVersion;
     private readonly Func<bool> _busy;
     private readonly Func<string> _playerKey;
+    private readonly Func<bool> _mayCall;
+    private readonly Action _called;
 
     private (int Wardrobe, int Session, int Items) _seen = (int.MinValue, 0, 0);
     private IReadOnlyList<SlotShowing> _showing = Array.Empty<SlotShowing>();
@@ -30,9 +32,14 @@ public sealed class ColourWorld : IColourWorld
     /// <param name="gameItemsVersion"> Changes when <paramref name="gameItem"/> may say something else (default: never on its own). </param>
     /// <param name="busy"> The game is busy with the character besides the wardrobe's own redraws (zoning). </param>
     /// <param name="playerKey"> Who the player is, "name@world" ("" when nobody is logged in): the colours' rows belong to them. </param>
+    /// <param name="mayCall"> The colours may call Glamourer on their own in this frame (the pace: not while loading, one call per frame). </param>
+    /// <param name="called"> The colours called Glamourer in this frame (takes the frame's turn). </param>
     public ColourWorld(ClosetSession session, IWardrobe wardrobe, Func<nint> player, Func<string> whyNot, Func<int, string?> gameItem,
-        Func<int>? gameItemsVersion = null, Func<bool>? busy = null, Func<string>? playerKey = null)
+        Func<int>? gameItemsVersion = null, Func<bool>? busy = null, Func<string>? playerKey = null, Func<bool>? mayCall = null,
+        Action? called = null)
     {
+        _mayCall          = mayCall ?? (() => true);
+        _called           = called ?? (() => { });
         _playerKey        = playerKey ?? (() => string.Empty);
         _busy             = busy ?? (() => false);
         _session          = session;
@@ -76,6 +83,12 @@ public sealed class ColourWorld : IColourWorld
 
     public bool Busy
         => _wardrobe.Busy || _busy();
+
+    public bool MayCall
+        => _mayCall();
+
+    public void Called()
+        => _called();
 
     private void Refresh()
     {

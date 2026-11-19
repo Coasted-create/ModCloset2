@@ -35,6 +35,8 @@ public static class PartBuilder
             Socket.Neck         => Pieces.Necklace,
             Socket.Wrists       => Pieces.Bracelets,
             Socket.Rings        => Pieces.Rings,
+            Socket.MainHand     => Pieces.MainHand,
+            Socket.OffHand      => Pieces.OffHand,
             Socket.Hair         => Pieces.Hair,
             Socket.Face         => Pieces.Face,
             Socket.FaceTextures => Pieces.Makeup,
@@ -260,6 +262,10 @@ public static class PartBuilder
                     info.RaceCodes = (c.Models.Count > 0 ? c.Models : c.Other).Order().ToList();
             }
 
+            // a weapon's kind is its class, as the game names it ("Gladiator's Arm"): the weapon shelves' kind chips
+            if (socket is Socket.MainHand or Socket.OffHand && (info.Kind is "" or "weapon") && WeaponClass(s1.Items) is { Length: > 0 } weaponClass)
+                info.Kind = weaponClass;
+
             var fits = FitsMe(socket, inStep1 ? s1.Fits : null, info, facts, player, chain);
             parts.Add(new LibPart
             {
@@ -337,6 +343,14 @@ public static class PartBuilder
                     result.UnionWith(c.Other);
         return result;
     }
+
+    /// <summary> The class of a weapon part (the game's category of its first item that has one), or "". </summary>
+    public static string WeaponClass(IReadOnlyList<ItemChoice>? items)
+        => items?.FirstOrDefault(i => i.Category.Length > 0)?.Category ?? string.Empty;
+
+    /// <summary> A cached read of a mod's items with weapons but no weapon class (made before 0.7.11): read again. </summary>
+    public static bool WeaponsWithoutCategory(ModItems items)
+        => items.Slots.Any(s => s.Slot is "MainHand" or "OffHand" && s.Items.Count > 0 && s.Items.All(i => i.Category.Length == 0));
 
     /// <summary> One item per model set, best first (items of one set look the same, so they are one version). </summary>
     public static List<ItemChoice> Versions(IReadOnlyList<ItemChoice> items)

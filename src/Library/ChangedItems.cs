@@ -103,7 +103,7 @@ public static partial class ChangedItems
                 if (!bySlot.TryGetValue(item.Slot, out var pieces))
                     bySlot[item.Slot] = pieces = new SlotPieces { Slot = item.Slot, SlotId = slotId };
                 if (pieces.Items.All(i => i.Id != item.Id))
-                    pieces.Items.Add(new ItemChoice(item.Id, item.Name, item.Model));
+                    pieces.Items.Add(new ItemChoice(item.Id, item.Name, item.Model, item.Category));
                 continue;
             }
 

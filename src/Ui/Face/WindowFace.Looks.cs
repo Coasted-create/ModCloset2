@@ -138,7 +138,21 @@ public sealed partial class WindowFace
         Stats.Places["now-name"] = nameBox;
         var shownName = NowName(now);
         var drawnW    = Painter.TextIn(_c, nameBox, shownName, Theme.Strong, Theme.Text);
-        if (drawnW < _c.Measure(shownName, Theme.Strong).X - 0.5f)
+        var cut       = drawnW < _c.Measure(shownName, Theme.Strong).X - 0.5f;
+        if (now.Look is { } nowLook && looks.Sheet is not null)
+        {
+            // the look that is on: its picture and name open its sheet
+            var top  = Math.Min(collage.Y, ty);
+            var open = new Rect(collage.X, top, nameBox.Right - collage.X, Math.Max(collage.Bottom, nameBox.Bottom) - top);
+            Stats.Places["now-sheet"] = open;
+            var oresp = _ui.Interact("now-sheet", open);
+            if (oresp.Hovered)
+                _c.FillRect(open, Theme.HoverWash, P(10));
+            _ui.Tip("now-sheet", open, cut ? Loc.F("{0} · {1}", shownName, Loc.T("Open its look sheet")) : Loc.T("Open its look sheet"));
+            if (oresp.Clicked)
+                OpenSheet(nowLook);
+        }
+        else if (cut)
         {
             // cut: the whole name (or the equal looks' names) on hovering
             _ui.Interact("now-name", nameBox, false);
@@ -384,8 +398,13 @@ public sealed partial class WindowFace
             _c.StrokeRect(r.Expand(P(2)), Theme.Accent, P(14), P(2));
         if (missResp.Clicked)
             _ui.OpenPopup(PopReplace, new Vector2(markBox.X, markBox.Bottom + P(6)), card);
-        else if (resp.Clicked && card.State != CardState.Trying)
-            looks.Try(card.Id);
+        else if (resp.Clicked)
+        {
+            // a click tries it on and opens its sheet beside the closet (a look being tried: only the sheet)
+            if (card.State != CardState.Trying)
+                looks.Try(card.Id);
+            OpenSheet(card.Id);
+        }
         if (resp.RightClicked)
             _ui.OpenPopup(PopLook, _ui.Mouse, card);
     }
@@ -414,8 +433,12 @@ public sealed partial class WindowFace
             _c.StrokeRect(r.Expand(P(2)), Theme.Accent, P(14), P(2));
         if (pinResp.Clicked)
             looks.Pin(card.Id);
-        else if (resp.Clicked && card.State != CardState.Trying)
-            looks.Try(card.Id);
+        else if (resp.Clicked)
+        {
+            if (card.State != CardState.Trying)
+                looks.Try(card.Id);
+            OpenSheet(card.Id);
+        }
         if (resp.RightClicked)
             _ui.OpenPopup(PopLook, _ui.Mouse, card);
     }

@@ -4,7 +4,7 @@ Your [Penumbra](https://github.com/xivdev/Penumbra) mods as a closet. Mod Closet
 FINAL FANTASY XIV that sorts your mods onto shelves by what they are on you (tops, shoes, earrings, tails, nails…),
 lets you try one on with a click, and keeps it only when you say so.
 
-> **Status: test build (0.7.10).** It has been used on one large mod library. Expect rough edges, and please report them.
+> **Status: test build (0.8.1).** It has been used on one large mod library. Expect rough edges, and please report them.
 
 ## What it does
 
@@ -31,8 +31,11 @@ lets you try one on with a click, and keeps it only when you say so.
 - **A photo on every card.** The closet draws a picture of each piece itself, in the background: clothes, jewellery,
   hair, tails, makeup and skin, on a dummy made from the game's own head and body. Nothing is put on your character.
 - **Outfit colours.** Recolour what you wear: one area, a whole piece in one step, or the whole outfit.
-- **Looks.** What you wear together is saved as a look by itself, or with Save look under a name of your own;
-  you choose whether bodies, hair, makeup and the like go with it.
+- **Looks.** What you wear together is saved as a look by itself, or with Save look under a name of your own.
+  A look's sheet lets you choose, piece by piece, what it keeps: clothes, jewellery, weapons, your skin, hair,
+  eye and lip colours, whether the weapon and hat show, and it can put itself on when you switch gearset or job,
+  or become a Glamourer design.
+- **Weapons.** Main hand and Off hand shelves; a tried weapon goes in your hand when your job can hold it.
 - **On you.** Point at a part of your character to flip through that shelf.
 - **Make it its own mod.** Copy one piece out of a big mod into a new mod of its own. The mod it comes from is not
   changed.

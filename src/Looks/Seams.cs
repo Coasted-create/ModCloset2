@@ -33,8 +33,51 @@ public sealed record LookTryPart(PartKey Key, IReadOnlyDictionary<string, List<s
 /// <param name="Parts"> Parts to put on, each in its socket (only those that are not on already as asked). </param>
 /// <param name="TakeOff"> Kept parts to take off (as the Nothing tile does for them): what is on in a socket the look wants empty. </param>
 /// <param name="Colours"> Colours to show with the try (a colour snapshot of <see cref="ILooksColours"/>), null: leave the colours alone. </param>
+/// <param name="Character"> The character's colours and showings to put on with the try (Glamourer), null: none. </param>
 public sealed record LookTry(Guid Look, int Colourway, string Name, string Note, IReadOnlyList<LookTryPart> Parts, IReadOnlyList<PartKey> TakeOff,
-    string? Colours);
+    string? Colours, CharacterLook? Character = null);
+
+/// <summary>
+/// The character's colours (key → 0xRRGGBB: "skin", "hair", "highlights", "eyeLeft", "eyeRight", "lips", "facePaint",
+/// "tattoo") and what is shown (key → on: "weapon" drawn, "hat" shown, "visor" down), as Glamourer has them. A key that
+/// is not there is not known (read) or not set (put on).
+/// </summary>
+public sealed record CharacterLook(IReadOnlyDictionary<string, uint> Colours, IReadOnlyDictionary<string, bool> Showing)
+{
+    public static readonly CharacterLook Empty = new(new Dictionary<string, uint>(), new Dictionary<string, bool>());
+
+    public bool IsEmpty
+        => Colours.Count == 0 && Showing.Count == 0;
+}
+
+/// <summary> The game, as a look worn by itself needs it: the gearsets and jobs, and which is on now. </summary>
+public interface ILooksGame
+{
+    /// <summary> The character's gearsets in order: number (1-based), name, job abbreviation. Empty when not known. </summary>
+    IReadOnlyList<(int Number, string Name, string Job)> Gearsets { get; }
+
+    /// <summary> The jobs in the game's order: abbreviation and name. </summary>
+    IReadOnlyList<(string Abbreviation, string Name)> Jobs { get; }
+
+    /// <summary> The gearset in use (1-based), 0 when none or not known. Read every frame: cheap. </summary>
+    int CurrentGearset { get; }
+
+    /// <summary> The job now (its abbreviation), "" when not known. Read every frame: cheap. </summary>
+    string CurrentJob { get; }
+}
+
+/// <summary> Glamourer's designs, as a look kept as a design needs them. </summary>
+public interface ILooksDesigns
+{
+    /// <summary> Why a design cannot be made in Glamourer by the closet ("" when it can). </summary>
+    string Problem { get; }
+
+    /// <summary> Makes a design from a Glamourer design text (JSON), replacing <paramref name="old"/>; its id, or null when that failed. </summary>
+    Guid? Put(string name, string design, Guid? old);
+
+    /// <summary> Puts a text on the clipboard; false when that is not possible. </summary>
+    bool Copy(string text);
+}
 
 /// <summary> A Keep of a try that started as a look. <see cref="Serial"/> goes up by one with every such Keep. </summary>
 public sealed record LookKept(Guid Look, int Colourway, int Serial);
@@ -74,6 +117,15 @@ public interface ILooksOutfit
 
     /// <summary> Tries a look on (replacing what was tried before). Also a try with no parts and only colours. </summary>
     void TryLook(LookTry look);
+
+    /// <summary> Keeps what is tried (as the Keep button does). For a look worn by itself (a gearset changed). </summary>
+    void Keep()
+    {
+    }
+
+    /// <summary> The character's colours and showings worn now (Glamourer), null when not known. </summary>
+    CharacterLook? Character
+        => null;
 
     /// <summary>
     /// Shows one sentence on the closet's status line (what a save did: "Saved as “Gala night”."). Translated already.
@@ -130,6 +182,10 @@ public interface ILooksLibrary
 
     /// <summary> The version (index into the part's versions) a game item belongs to, -1 when none. For the old looks. </summary>
     int VersionOf(PartKey key, ulong item);
+
+    /// <summary> The game item a gear part is worn through in one of its versions, 0 when none (a Glamourer design holds it). </summary>
+    ulong ItemOf(PartKey key, int version)
+        => 0;
 
     /// <summary> A shelf's name, translated ("Tops"). </summary>
     string ShelfName(string shelf);

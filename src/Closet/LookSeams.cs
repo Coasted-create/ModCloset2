@@ -134,6 +134,11 @@ public sealed class LooksLibrary : ILooksLibrary
     public int VersionOf(PartKey key, ulong item)
         => _library.PartsOf(key.Mod).FirstOrDefault(p => p.Key == key) is { } part ? part.VersionOf(item) : -1;
 
+    public ulong ItemOf(PartKey key, int version)
+        => _library.PartsOf(key.Mod).FirstOrDefault(p => p.Key == key) is { Versions.Count: > 0 } part
+            ? part.Versions[Math.Clamp(version, 0, part.Versions.Count - 1)].Id
+            : 0;
+
     public string ShelfName(string shelf)
         => _session.NameOfShelf(shelf);
 

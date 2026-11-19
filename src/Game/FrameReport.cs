@@ -22,10 +22,31 @@ public static class FrameReport
     [ThreadStatic] private static (string What, int Count)[]? _steps;
     [ThreadStatic] private static int _stepCount;
     [ThreadStatic] private static int _moreSteps;
+    [ThreadStatic] private static long _gcPauseTicks;
+    [ThreadStatic] private static int _gcCount;
+    [ThreadStatic] private static double _ownMs;
+    [ThreadStatic] private static double _lastOwnMs;
+
+    /// <summary> A new frame of the framework update starts: what the closet's parts took in the last one is <see cref="LastOwnMs"/>. </summary>
+    public static void NewFrame()
+    {
+        _lastOwnMs = _ownMs;
+        _ownMs     = 0;
+    }
+
+    /// <summary> One part of the update took this long (adds to this frame's own time). </summary>
+    public static void PartEnded(double ms)
+        => _ownMs += ms;
+
+    /// <summary> What the closet's parts of the update took together in the frame before (the pace skips periodic reads after a long one). </summary>
+    public static double LastOwnMs
+        => _lastOwnMs;
 
     /// <summary> Starts counting for one part of the update. </summary>
     public static void Begin()
     {
+        _gcPauseTicks = GC.GetTotalPauseDuration().Ticks;
+        _gcCount      = GC.CollectionCount(0);
         _calls        = 0;
         _callTicks    = 0;
         _slowest      = null;
@@ -105,6 +126,12 @@ public static class FrameReport
         {
             text.Append(" · no calls to other plugins");
         }
+
+        // the runtime's garbage collection stops every thread, the frame's too: then it was not the closet's work
+        var paused = TimeSpan.FromTicks(GC.GetTotalPauseDuration().Ticks - _gcPauseTicks).TotalMilliseconds;
+        var gcs    = GC.CollectionCount(0) - _gcCount;
+        if (paused >= 1 || gcs > 0)
+            text.Append($" · garbage collection {gcs}×, paused {paused:0} ms");
 
         return text.ToString();
     }

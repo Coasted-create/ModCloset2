@@ -152,6 +152,33 @@ public sealed class LookData
     [JsonPropertyName("colourway")]
     public int Colourway { get; set; }
 
+    /// <summary>
+    /// The character's colours the look sets (key → 0xRRGGBB: "skin", "hair", "highlights", "eyeLeft", "eyeRight", "lips",
+    /// "facePaint", "tattoo"). A key that is not here is left as it is (every colour of an older look).
+    /// </summary>
+    [JsonPropertyName("mine")]
+    public Dictionary<string, uint> MyColours { get; set; } = new();
+
+    /// <summary> What the look shows or hides (key → on: "weapon" drawn, "hat" shown, "visor" down); absent: left alone. </summary>
+    [JsonPropertyName("showing")]
+    public Dictionary<string, bool> Showing { get; set; } = new();
+
+    /// <summary> The gearset (its number, 1-based) that puts the look on by itself, or null. </summary>
+    [JsonPropertyName("gearset")]
+    public string? Gearset { get; set; }
+
+    /// <summary> The job (its abbreviation, "DNC") that puts the look on by itself, or null. </summary>
+    [JsonPropertyName("job")]
+    public string? Job { get; set; }
+
+    /// <summary> A Glamourer design named after the look is kept up to date. </summary>
+    [JsonPropertyName("design")]
+    public bool GlamourerDesign { get; set; }
+
+    /// <summary> The Glamourer design made for it last (replaced when it is made again), or null. </summary>
+    [JsonPropertyName("designId")]
+    public Guid? DesignId { get; set; }
+
     /// <summary> When the user removed it (only in <see cref="LooksFile.Removed"/>; null for every look in use). </summary>
     [JsonPropertyName("removedAt")]
     public DateTime? RemovedUtc { get; set; }
@@ -175,6 +202,12 @@ public sealed class LookData
             Empty       = Empty.ToList(),
             Colourways  = Colourways.Select(c => c.Copy()).ToList(),
             Colourway   = Colourway,
+            MyColours   = new Dictionary<string, uint>(MyColours),
+            Showing     = new Dictionary<string, bool>(Showing),
+            Gearset     = Gearset,
+            Job         = Job,
+            GlamourerDesign = GlamourerDesign,
+            DesignId    = DesignId,
             RemovedUtc  = RemovedUtc,
         };
 }
@@ -232,8 +265,12 @@ public sealed class SignatureConverter : JsonConverter<float[]>
 /// <summary> Everything the looks keep. </summary>
 public sealed class LooksFile
 {
-    /// <summary> 2: pieces by socket (1, one part per shelf, never shipped). </summary>
-    public const int CurrentVersion = 2;
+    /// <summary>
+    /// 3: a look also keeps the character's colours, what it shows, and how it is worn by itself (gearset, job, Glamourer
+    /// design); a file of version 2 reads with none of those, so its looks do what they did. 2: pieces by socket (1, one
+    /// part per shelf, never shipped).
+    /// </summary>
+    public const int CurrentVersion = 3;
 
     [JsonPropertyName("v")]
     public int Version { get; set; } = CurrentVersion;
@@ -275,8 +312,11 @@ public sealed class LooksFile
         try
         {
             var file = JsonSerializer.Deserialize<LooksFile>(text, Options) ?? new LooksFile();
-            if (file.Version < CurrentVersion)
+            if (file.Version < 2)
                 return new LooksFile(); // the one-part-per-shelf form never shipped: nothing to carry over
+            // version 2 (before the look sheet) reads as it is: its looks keep no colours, show nothing and are bound to
+            // nothing, so they do what they did; it is written as the current version
+            file.Version = CurrentVersion;
             file.Looks   = Clean(file.Looks);
             file.Removed = Clean(file.Removed).Where(l => l.RemovedUtc is not null && file.Looks.All(k => k.Id != l.Id)).ToList();
             return file;

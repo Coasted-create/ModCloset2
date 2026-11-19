@@ -82,12 +82,15 @@ public static class Healing
     /// A name with nothing in common scores 0 whatever the rest says: authors use the same file names in many mods.
     /// </summary>
     public static double Score(ModPrint print, string[] candidateWords, string candidateAuthor, IReadOnlyList<string>? candidateFiles)
+        => Score(print, LookTexts.Words(print.Name), candidateWords, candidateAuthor, candidateFiles);
+
+    /// <summary> <see cref="Score(ModPrint, string[], string, IReadOnlyList{string}?)"/> with the print's name words made once (a search scores thousands). </summary>
+    private static double Score(ModPrint print, string[] words, string[] candidateWords, string candidateAuthor, IReadOnlyList<string>? candidateFiles)
     {
-        var words = LookTexts.Words(print.Name);
         var score = 0.0;
         if (words.Length > 0 && words.SequenceEqual(candidateWords))
             score += 0.5;
-        else if (LookTexts.Alike(words, candidateWords) is var alike and >= 0.5)
+        else if (Alike(words, candidateWords) is var alike and >= 0.5)
             score += 0.4 * alike;
         else
             return 0;
@@ -104,6 +107,29 @@ public static class Healing
         }
 
         return score;
+    }
+
+    /// <summary>
+    /// <see cref="LookTexts.Alike"/> for the few words of two names, without making sets (a search scores thousands of
+    /// names): shared distinct words over all distinct words.
+    /// </summary>
+    private static double Alike(string[] a, string[] b)
+    {
+        if (a.Length == 0 || b.Length == 0)
+            return 0;
+        int da = 0, db = 0, shared = 0;
+        for (var i = 0; i < a.Length; ++i)
+            if (Array.IndexOf(a, a[i]) == i)
+            {
+                da++;
+                if (Array.IndexOf(b, a[i]) >= 0)
+                    shared++;
+            }
+
+        for (var i = 0; i < b.Length; ++i)
+            if (Array.IndexOf(b, b[i]) == i)
+                db++;
+        return (double)shared / (da + db - shared);
     }
 
     /// <summary> The file name of a path, lower case ("chara/…/mt_top_a.mtrl" → "mt_top_a.mtrl"). </summary>
@@ -135,17 +161,20 @@ public static class Healing
             return null;
 
         var idx    = index();
+        var words  = LookTexts.Words(print.Name);
         var scored = new List<(LookLibraryPart Part, double Score)>();
         foreach (var candidate in idx.Candidates(piece.Socket, print))
         {
             if (taken.Contains(candidate.Key))
                 continue;
-            scored.Add((candidate, Score(print, idx.WordsOf(candidate), candidate.Author, null)));
+            // a name with nothing in common scores 0 and can never win: not kept (most candidates of a common word)
+            if (Score(print, words, idx.WordsOf(candidate), candidate.Author, null) is var score and > 0)
+                scored.Add((candidate, score));
         }
 
         // the files only for the few best by name and author (reading a part's files is not free)
         var best = scored.OrderByDescending(s => s.Score).Take(12)
-            .Select(s => (s.Part, Score: print.Files.Count > 0 ? Score(print, idx.WordsOf(s.Part), s.Part.Author, library.FilesOf(s.Part.Key)) : s.Score))
+            .Select(s => (s.Part, Score: print.Files.Count > 0 ? Score(print, words, idx.WordsOf(s.Part), s.Part.Author, library.FilesOf(s.Part.Key)) : s.Score))
             .OrderByDescending(s => s.Score).ThenBy(s => s.Part.Key.Mod, StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (best.Count == 0 || best[0].Score < LookRules.HealScore)

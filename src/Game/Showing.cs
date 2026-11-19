@@ -33,6 +33,15 @@ public static class Showing
                 tally[socket] = mods = new Dictionary<string, (bool, int)>(StringComparer.OrdinalIgnoreCase);
             var (model, files) = mods.GetValueOrDefault(dir);
             mods[dir] = (model || GamePaths.IsModel(game), files + 1);
+
+            // a weapon file's path does not say which hand holds it: it shows for the off hand as well
+            if (socket == Socket.MainHand)
+            {
+                if (!tally.TryGetValue(Socket.OffHand, out var off))
+                    tally[Socket.OffHand] = off = new Dictionary<string, (bool, int)>(StringComparer.OrdinalIgnoreCase);
+                var (offModel, offFiles) = off.GetValueOrDefault(dir);
+                off[dir] = (offModel || GamePaths.IsModel(game), offFiles + 1);
+            }
         }
 
         var result = new Dictionary<Socket, IReadOnlyList<string>>();

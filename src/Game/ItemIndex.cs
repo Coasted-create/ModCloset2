@@ -13,6 +13,7 @@ public sealed class ItemIndex
     private readonly IPluginLog _log;
     private volatile Dictionary<string, ItemRef>? _byName;
     private volatile Dictionary<ulong, string>? _names;
+    private volatile Dictionary<ulong, (uint Id, string Name)>? _weaponCategories;
 
     public ItemIndex(IDataManager data, IPluginLog log)
     {
@@ -28,6 +29,13 @@ public sealed class ItemIndex
     public ItemRef? Find(string name)
         => _byName is { } index && index.TryGetValue(name.Trim(), out var item) ? item : null;
 
+    /// <summary>
+    /// The game's category of a weapon or off-hand item by its id ("Gladiator's Arm", "Shield"): a job holds only weapons
+    /// of its own category (Glamourer keeps to that too). Null for other items and unknown ids. Thread-safe.
+    /// </summary>
+    public (uint Id, string Name)? WeaponCategory(ulong id)
+        => _weaponCategories is { } c && c.TryGetValue(id, out var category) ? category : null;
+
     /// <summary> The name of a wearable item by its id (as Glamourer gives it), or null. Thread-safe. </summary>
     public string? NameOf(ulong id)
         => _names is { } names && names.TryGetValue(id, out var name) ? name : null;
@@ -36,6 +44,7 @@ public sealed class ItemIndex
     {
         var index = new Dictionary<string, ItemRef>(StringComparer.OrdinalIgnoreCase);
         var names = new Dictionary<ulong, string>();
+        var weapons = new Dictionary<ulong, (uint, string)>();
         try
         {
             foreach (var row in data.GetExcelSheet<Item>())
@@ -44,10 +53,13 @@ public sealed class ItemIndex
                 if (name.Length == 0 || SlotOf(row) is not { } slot)
                     continue;
                 names[row.RowId] = name;
+                var category = row.ItemUICategory.ValueNullable is { } c ? (c.RowId, c.Name.ExtractText()) : (0u, string.Empty);
+                if (slot is "MainHand" or "OffHand" && category.Item1 != 0)
+                    weapons[row.RowId] = category;
 
                 // Same name twice: keep the newest row (the current version of the item).
                 if (!index.TryGetValue(name, out var existing) || existing.Id < row.RowId)
-                    index[name] = new ItemRef(row.RowId, name, slot, row.ModelMain);
+                    index[name] = new ItemRef(row.RowId, name, slot, row.ModelMain, slot is "MainHand" or "OffHand" ? category.Item2 : string.Empty);
             }
         }
         catch (Exception ex)
@@ -55,8 +67,9 @@ public sealed class ItemIndex
             _log.Warning($"Mod Closet 2: could not read the item list: {ex.Message}");
         }
 
-        _names  = names;
-        _byName = index;
+        _names            = names;
+        _weaponCategories = weapons;
+        _byName           = index;
     }
 
     private static string? SlotOf(in Item item)

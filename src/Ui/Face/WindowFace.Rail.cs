@@ -12,9 +12,14 @@ public sealed partial class WindowFace
         (PieceGroup.Top, string.Empty),
         (PieceGroup.Clothes, "Clothes"),
         (PieceGroup.Jewellery, "Jewellery"),
+        (PieceGroup.Weapons, "Weapons"),
         (PieceGroup.Body, "Body"),
         (PieceGroup.Mine, "Mine"),
     };
+
+    // how much a rail row and a group label may give up before the list scrolls
+    private const float RowGive = 7;
+    private const float LabelGive = 10;
 
     /// <summary> The rail: the outfit, shelf by shelf. The upper groups scroll when they do not fit; the bottom group stays put. </summary>
     private void Rail(Rect r)
@@ -62,10 +67,11 @@ public sealed partial class WindowFace
         var full    = items.Sum(i => i.H);
         var rowsN   = items.Count(i => i.Row is not null);
         var labelsN = items.Count(i => i.Label is not null && i.Label != ColoursId);
-        var spare   = rowsN * P(4) + labelsN * P(6);
+        // (up to 7 U a row and 10 U a label: with the weapons group too, the whole rail fits at the usual size)
+        var spare   = rowsN * P(RowGive) + labelsN * P(LabelGive);
         var squeeze = spare > 0 ? Math.Clamp((full - upperBox.H) / spare, 0, 1) : 0;
         if (squeeze > 0)
-            items = items.Select(i => (i.Label, i.Row, i.Row is not null ? i.H - P(4) * squeeze : i.Label is not null && i.Label != ColoursId ? i.H - P(6) * squeeze : i.H)).ToList();
+            items = items.Select(i => (i.Label, i.Row, i.Row is not null ? i.H - P(RowGive) * squeeze : i.Label is not null && i.Label != ColoursId ? i.H - P(LabelGive) * squeeze : i.H)).ToList();
 
         var contentH = items.Sum(i => i.H);
         var view     = new Rect(r.X, upperBox.Y, r.W - 1, upperBox.H);
@@ -79,7 +85,7 @@ public sealed partial class WindowFace
                 if (label == ColoursId && oc is not null)
                     ColoursEntry(new Rect(inner.X, y, inner.W, P(44)), oc);
                 else if (label is not null)
-                    Painter.TextIn(_c, new Rect(inner.X + P(8), y + P(8), inner.W - P(16), P(14)), label, Theme.Label, Theme.Muted);
+                    Painter.TextIn(_c, new Rect(inner.X + P(8), y + Math.Max(P(2), h - P(18)), inner.W - P(16), P(14)), label, Theme.Label, Theme.Muted);
                 else if (row is not null && row.Id == Pieces.Rings && rows.FirstOrDefault(x => x.Id == Pieces.RingsLeft) is { } left)
                     RailRingsWide(row, left, new Rect(inner.X, y, inner.W, Math.Min(P(30), h)));
                 else if (row is not null)

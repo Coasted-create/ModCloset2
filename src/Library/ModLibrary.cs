@@ -334,7 +334,8 @@ public sealed class ModLibrary : ILibrary, IDisposable
                 continue;
 
             ModItems items;
-            if (_itemsCache.Get(dir) is { } cached && cached.Stamp == facts.Stamp && facts.Stamp.Length > 0)
+            // (a weapon read before 0.7.11 has no category, its class on the weapon shelves: read once more)
+            if (_itemsCache.Get(dir) is { } cached && cached.Stamp == facts.Stamp && facts.Stamp.Length > 0 && !PartBuilder.WeaponsWithoutCategory(cached))
             {
                 items = cached;
             }

@@ -1,5 +1,7 @@
 using Dalamud.Game.ClientState.Conditions;
+using System.Diagnostics;
 using Dalamud.Plugin.Services;
+using ModCloset2.Wear;
 
 namespace ModCloset2.Game;
 
@@ -9,18 +11,67 @@ public sealed class GameState : IDisposable
     private readonly IObjectTable _objects;
     private readonly IClientState _clientState;
     private readonly ICondition _condition;
-    private DateTime _settleUntil = DateTime.MinValue;
 
     public GameState(IObjectTable objects, IClientState clientState, ICondition condition)
     {
         _objects     = objects;
         _clientState = clientState;
         _condition   = condition;
+        Pace         = new IpcPace(Clock);
         _clientState.TerritoryChanged += OnTerritoryChanged;
     }
 
+    /// <summary> Seconds, rising (the stopwatch): the clock of <see cref="Pace"/> and the wardrobe's periodic reads. </summary>
+    public double Clock()
+        => Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+
+    /// <summary> When the closet may call Penumbra and Glamourer: quiet while loading, one call per frame. Fed by <see cref="Frame"/>. </summary>
+    public IpcPace Pace { get; }
+
     private void OnTerritoryChanged(uint _)
-        => _settleUntil = DateTime.UtcNow.AddSeconds(4);
+        => Pace.TerritoryChanged();
+
+    /// <summary> Once per frame, first thing in the framework update: the pace learns whether the game loads. </summary>
+    public void Frame(double lastFrameMs, double lastOwnMs)
+        => Pace.Frame(Loading, lastFrameMs, lastOwnMs);
+
+    /// <summary>
+    /// The character is being torn down or built: a loading screen, a cutscene, or no player object. Penumbra and
+    /// Glamourer answer slowly then (a GetState took 829 ms while teleporting), so the closet calls neither.
+    /// </summary>
+    public bool Loading
+    {
+        get
+        {
+            if (_objects.LocalPlayer is null)
+                return true;
+            try
+            {
+                return _condition[ConditionFlag.BetweenAreas] || _condition[ConditionFlag.BetweenAreas51]
+                    || _condition[ConditionFlag.OccupiedInCutSceneEvent] || _condition[ConditionFlag.WatchingCutscene];
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary> A loading screen is up (the keys are not looked at then). </summary>
+    public bool LoadingScreen
+    {
+        get
+        {
+            try
+            {
+                return _condition[ConditionFlag.BetweenAreas] || _condition[ConditionFlag.BetweenAreas51];
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
 
     public bool LoggedIn
         => _objects.LocalPlayer is not null;
@@ -61,25 +112,11 @@ public sealed class GameState : IDisposable
     }
 
     /// <summary>
-    /// True while changing area (loading screen) and for a few seconds after, while the character loads again. Asking
-    /// Penumbra and Glamourer about a half-loaded character is slow and froze the game when teleporting (old plugin).
+    /// True while the game loads the character (see <see cref="Loading"/>) and for <see cref="IpcPace.SettleSeconds"/>
+    /// after (and after a territory change). As of the last <see cref="Frame"/>.
     /// </summary>
     public bool Zoning
-    {
-        get
-        {
-            if (_objects.LocalPlayer is null || DateTime.UtcNow < _settleUntil)
-                return true;
-            try
-            {
-                return _condition[ConditionFlag.BetweenAreas] || _condition[ConditionFlag.BetweenAreas51];
-            }
-            catch
-            {
-                return false;
-            }
-        }
-    }
+        => Pace.Quiet;
 
     /// <summary> "name@world" of the player, "" when nobody is logged in. </summary>
     /// <summary> The player's game object (for reading what the game draws), 0 when there is none. </summary>

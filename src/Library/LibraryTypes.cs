@@ -4,10 +4,12 @@ using ModCloset2.Game;
 namespace ModCloset2.Library;
 
 /// <summary> A wearable item from the game's item list: row id, name, slot name ("Body", "RFinger"…) and model (ModelMain). </summary>
-public sealed record ItemRef(uint Id, string Name, string Slot, ulong Model);
+/// <param name="Category"> The game's item category ("Gladiator's Arm", "Shield"), in the client's language; "" when unknown. </param>
+public sealed record ItemRef(uint Id, string Name, string Slot, ulong Model, string Category = "");
 
 /// <summary> One game item a mod changes. <see cref="Model"/> is the item's ModelMain (0 when unknown). </summary>
-public sealed record ItemChoice(ulong Id, string Name, ulong Model = 0)
+/// <param name="Category"> The game's item category ("Gladiator's Arm"): a weapon's class, its kind on the weapon shelves. </param>
+public sealed record ItemChoice(ulong Id, string Name, ulong Model = 0, string Category = "")
 {
     /// <summary> The model set the item shows (low 16 bits of ModelMain): items of one set are one version. </summary>
     public int SetId

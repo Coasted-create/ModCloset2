@@ -26,7 +26,7 @@ public interface IWearSettings
 ///   items put on. Every Keep is one step in the history.
 /// - Take off: puts the mod's earlier settings back and empties what it showed, only where it still shows what Keep put on.
 /// </summary>
-public sealed partial class Wardrobe : IWardrobe, IDisposable
+public sealed partial class Wardrobe : IWardrobe, IPeriodicReader, IDisposable
 {
     private const int PlayerIndex = 0;
 
@@ -40,6 +40,12 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
     private readonly Func<string, LibMod?> _mod;
     private readonly Func<string> _body;
 
+    /// <summary> When calls may run, frame by frame (quiet while loading, one call per frame): the game state's. </summary>
+    private readonly IpcPace _pace;
+
+    /// <summary> The settings and what shows, read every few seconds, one call per frame. </summary>
+    private readonly PeriodicReads _reads;
+
     /// <summary>
     /// The priority a kept mod needs to win in the given sockets (just above what it competes with there), or null when
     /// that is not known (then it goes above every enabled mod, as the old plugin did without its analysis).
@@ -47,6 +53,12 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
     /// competes with nothing), mods not to count as competitors (an upper layer it goes under).
     /// </summary>
     public Func<string, IReadOnlyCollection<Socket>, int, IReadOnlyCollection<string>, int?>? PriorityAdvisor { get; set; }
+
+    /// <summary>
+    /// The game's category of a weapon or off-hand item by id ("Gladiator's Arm"), or null: a weapon goes into a hand
+    /// only when the job holds that category there now (see <see cref="WearRules.CanHold"/>).
+    /// </summary>
+    public Func<ulong, (uint Id, string Name)?>? WeaponCategory { get; set; }
 
     // ---- trying on ----
 
@@ -70,8 +82,6 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
 
     private Dictionary<Socket, IReadOnlyList<string>> _kept = new();
     private Dictionary<string, ulong> _keptItems = new(StringComparer.OrdinalIgnoreCase);
-    private DateTime _truthNext = DateTime.MinValue;
-    private DateTime _settingsRead = DateTime.MinValue;
 
     /// <summary> A face is open (the window, On you): what is on and the collection's settings are read every few seconds. </summary>
     public bool Watching { get; set; }
@@ -98,6 +108,8 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         _part       = part;
         _mod        = mod;
         _body       = body;
+        _pace       = game.Pace;
+        _reads      = new PeriodicReads(_pace, game.Clock);
         _ipc.Redrawn += OnRedrawn;
     }
 
@@ -192,16 +204,41 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
     public StepState Step(Guid step)
         => _steps.TryGetValue(step, out var state) ? state : _journal.Has(step) ? StepState.Done : StepState.Unknown;
 
+    // ---- the character's colours and showings (a look's) ----
+
+    private Looks.CharacterLook? _character;
+    private Looks.CharacterLook? _characterNow;
+
+    public Looks.CharacterLook? CharacterNow
+        => _characterNow;
+
+    public void WithCharacter(Looks.CharacterLook? character)
+        => _character = character is { IsEmpty: false } ? character : null;
+
+    /// <summary> Puts the character's colours and showings on through Glamourer (only those keys); "" or a sentence on failure. </summary>
+    private string PutOnCharacter(Looks.CharacterLook? character)
+    {
+        if (character is null)
+            return string.Empty;
+        var state = GlamourerState.CharacterState(character.Colours, character.Showing, _ipc.GetStateJson(PlayerIndex));
+        var r = _ipc.ApplyState(state, PlayerIndex, Ipc.FlagEquipment | Ipc.FlagCustomization | Ipc.FlagOnce);
+        if (r is Ipc.GlamourerSuccess or Ipc.GlamourerNothingDone)
+            return string.Empty;
+        Said($"wearing: Glamourer refused the colours (code {r})");
+        return Loc.T("Glamourer did not take the look's colours.");
+    }
+
     public void Preview(IReadOnlyList<TryRequest> parts)
     {
-        if (parts.Count == 0)
+        if (parts.Count == 0 && _character is null)
         {
             PutBack();
             return;
         }
 
         var copy = parts.ToList();
-        Enqueue(true, () => PreviewNow(copy));
+        var character = _character;
+        Enqueue(true, () => PreviewNow(copy, character));
     }
 
     public void PutBack()
@@ -218,7 +255,8 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         DropQueuedPreviews();
         _steps[step] = StepState.Pending;
         var copy = parts.ToList();
-        Enqueue(false, () => KeepNow(step, description, copy), step);
+        var character = _character;
+        Enqueue(false, () => KeepNow(step, description, copy, character), step);
     }
 
     public void SetOptions(Guid step, string description, PartKey part, IReadOnlyDictionary<string, List<string>> options)
@@ -280,7 +318,7 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             return;
         if (_redrawAt is not null)
             _redrawSettled ??= DateTime.UtcNow.AddSeconds(0.6); // the new draw object exists; its models load right after
-        _truthNext = DateTime.UtcNow.AddSeconds(1.0);
+        _reads.TruthNext = _game.Clock() + 1.0;
     }
 
     /// <summary> Redraws you and remembers that the game is busy with it. </summary>
@@ -289,13 +327,15 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         _redrawAt      = DateTime.UtcNow;
         _redrawSettled = null;
         _ipc.Redraw(PlayerIndex);
-        _truthNext = DateTime.UtcNow.AddSeconds(2.5);
+        _reads.TruthNext = _game.Clock() + 2.5;
     }
 
     private void Enqueue(bool preview, Action run, Guid? step = null)
     {
-        if (_queue.Count == 0 && !RedrawBusy)
+        // quiet while the game loads (and one call per frame): the step waits in the queue, Update runs it once settled
+        if (_queue.Count == 0 && !RedrawBusy && _pace.May(IpcWork.Step))
         {
+            _pace.Took(IpcWork.Step);
             Run(run, step);
             return;
         }
@@ -331,8 +371,9 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
     /// <summary> Framework thread: runs what waits, puts a saved look back once its character is here again, reads what is on. </summary>
     public void Update()
     {
-        if (_queue.Count > 0 && !RedrawBusy)
+        if (_queue.Count > 0 && !RedrawBusy && _pace.May(IpcWork.Step))
         {
+            _pace.Took(IpcWork.Step);
             var (_, run, step) = _queue[0];
             _queue.RemoveAt(0);
             Run(run, step);
@@ -340,7 +381,10 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
 
         UpdateSlotCheck();
         UpdatePendingRestore();
-        UpdateTruth();
+        // the periodic reads: with no face open and nothing following, nothing needs what is on (Penumbra's settings,
+        // thousands of mods, and the resource tree are not read then); Keep and the other steps read the settings
+        // themselves, opening a face reads both
+        _reads.Tick(this);
 
         var busy = Busy;
         if (busy != _wasBusy)
@@ -373,6 +417,8 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
                 return;
         }
 
+        if (!_pace.Take(IpcWork.Restore))
+            return;
         FrameReport.Step("putting a look back");
         var r = _ipc.ApplyState(_pendingRestore, PlayerIndex, Ipc.FlagEquipment | Ipc.FlagCustomization | Ipc.FlagOnce);
         if (r is Ipc.GlamourerSuccess or Ipc.GlamourerNothingDone)
@@ -386,36 +432,48 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         _pendingDue = DateTime.UtcNow + WearRules.RestoreEvery;
     }
 
-    private void UpdateTruth()
+    /// <summary> Reads what shows on the player now (Penumbra's resource tree and Glamourer's items). </summary>
+    // ---- IPeriodicReader: the reads, one call per frame (PeriodicReads decides when) ----
+
+    bool IPeriodicReader.CanRead
+        => _ipc.PenumbraAvailable && _game.LoggedIn;
+
+    bool IPeriodicReader.TruthWanted
+        => !_previewActive && _queue.Count == 0 && !RedrawBusy;
+
+    private Dictionary<Socket, IReadOnlyList<string>>? _truthShowing;
+
+    bool IPeriodicReader.ReadTruthFirst()
     {
-        // With no face open and nothing following, nothing needs what is on: Penumbra's settings (thousands of mods) and the
-        // resource tree are not read then. Keep and the other steps read the settings themselves; opening a face reads both.
-        if (!Watching && !Following)
-            return;
-
-        var now = DateTime.UtcNow;
-        if (Watching && now >= _settingsRead.AddSeconds(3) && _ipc.PenumbraAvailable && _game.LoggedIn && !_game.Zoning)
-            RefreshSettings(force: true);
-
-        if (now < _truthNext)
-            return;
-        _truthNext = now.AddSeconds(Watching ? 2 : 3);
-
-        // While trying on, what shows is the try; the kept outfit is what showed before it.
-        if (_previewActive || _queue.Count > 0 || RedrawBusy || _game.Zoning || !_ipc.PenumbraAvailable)
-            return;
-        ReadTruth();
+        FrameReport.Step("reading what shows");
+        if (_ipc.ResourceMap(PlayerIndex) is not { } map)
+            return false;
+        _truthShowing = Showing.Read(map, GamePaths.RootFull(_ipc.ModDirectory()));
+        return true;
     }
 
-    /// <summary> Reads what shows on the player now (Penumbra's resource tree and Glamourer's items). </summary>
+    void IPeriodicReader.ReadTruthSecond()
+    {
+        FrameReport.Step("reading what shows");
+        if (_truthShowing is not { } showing)
+            return;
+        _truthShowing = null;
+        TakeTruth(showing, _ipc.GetStateJson(PlayerIndex));
+    }
+
+    /// <summary> Reads what shows on the player now, both calls in this frame (for a step, which needs it now). </summary>
     private void ReadTruth()
     {
         FrameReport.Step("reading what shows");
         if (_ipc.ResourceMap(PlayerIndex) is not { } map)
             return;
-        var showing = Showing.Read(map, GamePaths.RootFull(_ipc.ModDirectory()));
+        TakeTruth(Showing.Read(map, GamePaths.RootFull(_ipc.ModDirectory())), _ipc.GetStateJson(PlayerIndex));
+    }
+
+    /// <summary> What shows on the player now (Penumbra's resource tree and Glamourer's state, read in two frames). </summary>
+    private void TakeTruth(Dictionary<Socket, IReadOnlyList<string>> showing, JObject? state)
+    {
         var items   = new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
-        var state   = _ipc.GetStateJson(PlayerIndex);
         foreach (var slot in GearSlots.Worn)
             if (GlamourerState.ItemIn(state, slot.Name) is var id and not 0)
                 items[slot.Name] = id;
@@ -424,6 +482,14 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         foreach (var key in new[] { "Hairstyle", "Face", "TailShape" })
             if (state?["Customize"]?[key]?["Value"] is JValue { Type: JTokenType.Integer } v)
                 numbers[key] = Convert.ToInt32(v.Value);
+
+        // the character's colours and showings (a new object only when they changed)
+        var (colours, shows) = GlamourerState.CharacterOf(state);
+        if (state is not null && (_characterNow is null || !SameCharacter(_characterNow, colours, shows)))
+        {
+            _characterNow = new Looks.CharacterLook(colours, shows);
+            Version++;
+        }
 
         if (Showing.Same(showing, _kept) && items.Count == _keptItems.Count && items.All(kv => _keptItems.GetValueOrDefault(kv.Key) == kv.Value)
          && numbers.Count == _keptCustomize.Count && numbers.All(kv => _keptCustomize.GetValueOrDefault(kv.Key, -1) == kv.Value))
@@ -434,22 +500,44 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         Version++;
     }
 
+    private static bool SameCharacter(Looks.CharacterLook a, Dictionary<string, uint> colours, Dictionary<string, bool> showing)
+        => a.Colours.Count == colours.Count && colours.All(kv => a.Colours.TryGetValue(kv.Key, out var c) && c == kv.Value)
+        && a.Showing.Count == showing.Count && showing.All(kv => a.Showing.TryGetValue(kv.Key, out var s) && s == kv.Value);
+
     // ---- collection settings ----
 
     /// <summary> Permanent settings in the player's collection (mod directory → enabled, priority, options, inherited). </summary>
     public Dictionary<string, (bool Enabled, int Priority, Dictionary<string, List<string>> Options, bool Inherited)> Settings { get; private set; }
         = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary> Re-reads the collection's mod settings (throttled unless forced). </summary>
+    /// <summary>
+    /// Re-reads the collection's mod settings now (throttled to every 3 s unless forced), both calls in this frame: for
+    /// the steps, which need them fresh. The periodic read goes through <see cref="PeriodicReads"/>, one call per frame.
+    /// </summary>
     public void RefreshSettings(bool force = false)
     {
-        if (!force && (DateTime.UtcNow - _settingsRead).TotalSeconds < 3)
+        if (!force && _game.Clock() - _reads.SettingsReadAt < PeriodicReads.SettingsEvery)
             return;
-        FrameReport.Step("reading the collection's settings");
+        _reads.SettingsRead();
+        if (ReadSettingsFirst())
+            ReadSettingsSecond();
+    }
 
-        _settingsRead = DateTime.UtcNow;
-        if (_ipc.CollectionForObject(PlayerIndex) is not { } collection)
-            return;
+    private Guid? _settingsCollection;
+
+    bool IPeriodicReader.ReadSettingsFirst()
+        => ReadSettingsFirst();
+
+    void IPeriodicReader.ReadSettingsSecond()
+        => ReadSettingsSecond();
+
+    /// <summary> The collection, and the temporary settings other plugins hold in it. False: no collection. </summary>
+    private bool ReadSettingsFirst()
+    {
+        FrameReport.Step("reading the collection's settings");
+        _settingsCollection = _ipc.CollectionForObject(PlayerIndex);
+        if (_settingsCollection is not { } collection)
+            return false;
 
         // the temporary settings other plugins hold in the collection (a Glamourer design's mods, a sync plugin): they
         // go over the collection's own while they last, also in priority, so what the closet puts on must beat them too
@@ -457,7 +545,15 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             OthersTemporary = effective.Where(kv => kv.Value.Item5 && !_previewMods.Contains(kv.Key, StringComparer.OrdinalIgnoreCase)
                     && !_previewOff.Contains(kv.Key, StringComparer.OrdinalIgnoreCase))
                 .ToDictionary(kv => kv.Key, kv => (kv.Value.Item1, kv.Value.Item2), StringComparer.OrdinalIgnoreCase);
+        return true;
+    }
 
+    /// <summary> The collection's own settings (the collection read by <see cref="ReadSettingsFirst"/>). </summary>
+    private void ReadSettingsSecond()
+    {
+        FrameReport.Step("reading the collection's settings");
+        if (_settingsCollection is not { } collection)
+            return;
         if (_ipc.AllSettings(collection, ignoreTemporary: true) is { } all)
         {
             var fresh = all.ToDictionary(kv => kv.Key, kv => (kv.Value.Item1, kv.Value.Item2, kv.Value.Item3, kv.Value.Item4), StringComparer.OrdinalIgnoreCase);
@@ -574,7 +670,7 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
     // ---- trying on ----
 
     /// <summary> Temporarily puts on parts over your current look (port of the old PreviewMany). </summary>
-    private void PreviewNow(IReadOnlyList<TryRequest> requests)
+    private void PreviewNow(IReadOnlyList<TryRequest> requests, Looks.CharacterLook? character)
     {
         Report("trying on", "taking off", requests);
         if (!Ready(out var why))
@@ -622,6 +718,7 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         _touched.Add(collection);
         var failed   = new List<string>();
         var problems = new List<string>();
+        var notes    = new List<string>();
         foreach (var item in wear)
         {
             var settings = item.Options.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value);
@@ -634,7 +731,10 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             }
 
             _previewMods.Add(item.Mod);
-            if (PutOn(item).Problem is { Length: > 0 } problem)
+            var put = PutOn(item);
+            if (put.Note.Length > 0)
+                notes.Add(put.Note);
+            if (put.Problem is { Length: > 0 } problem)
             {
                 problems.Add(problem);
                 Said(item.Customize.Count == 0 && item.Sockets.Any(GearSlots.IsCustomization)
@@ -650,7 +750,12 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             if (TakeOffForPreview(item, priority++, tried))
                 tookOff++;
 
-        if (_previewMods.Count == 0 && tookOff == 0)
+        // a look's colours and showings, over everything it put on (Put back gives your look back, colours too)
+        var characterProblem = PutOnCharacter(character);
+        if (characterProblem.Length > 0)
+            problems.Add(characterProblem);
+
+        if (_previewMods.Count == 0 && tookOff == 0 && character is null)
         {
             EndPreview();
             Fail(failed.Count > 0 ? Loc.F("Penumbra could not put on {0}.", string.Join(", ", failed)) : Loc.T("That could not be tried on."),
@@ -665,6 +770,8 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             Fail(Loc.F("Penumbra could not put on {0}.", string.Join(", ", failed)));
         else if (problems.Count > 0)
             Fail(problems[0]);
+        else if (notes.Count > 0)
+            Note(notes[0]);
     }
 
     /// <summary>
@@ -750,7 +857,7 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
     /// Makes parts permanent and takes off the "nothing" ones, as one step in the history (the old WearMany and TakeOffMany
     /// in one, so a Keep of a new top and an empty hat is one undo).
     /// </summary>
-    private void KeepNow(Guid step, string description, IReadOnlyList<TryRequest> requests)
+    private void KeepNow(Guid step, string description, IReadOnlyList<TryRequest> requests, Looks.CharacterLook? character)
     {
         Report("keeping", "taking off for good", requests);
         if (!Ready(out var why))
@@ -811,6 +918,10 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
             if (i + 1 < wear.Count)
                 RefreshSettings(force: true);
         }
+
+        // a look's colours and showings are kept with its parts, in the same step (the look before and after is journaled)
+        if (PutOnCharacter(character) is { Length: > 0 } characterProblem)
+            problems.Add(characterProblem);
 
         RedrawPlayer();
         ScheduleSlotCheck(worn, collection, preview: false);
@@ -937,7 +1048,9 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         foreach (var (group, chosen) in item.Options)
             _ipc.TrySetSettings(collection, item.Mod, group, chosen);
 
-        var (items, customize, problem) = PutOn(item);
+        var (items, customize, problem, note) = PutOn(item);
+        if (note.Length > 0)
+            notes.Add(note);
         foreach (var (slot, id) in items)
             record.PutOnItems[slot] = id;
         foreach (var (key, value) in customize)
@@ -1158,7 +1271,7 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         _ipc.GetState(PlayerIndex, out var lookAfter);
         _journal.Commit(entry, new List<ModSettingState>(), lookAfter);
         _steps[step] = StepState.Done;
-        _truthNext = DateTime.UtcNow.AddSeconds(1.5);
+        _reads.TruthNext = _game.Clock() + 1.5;
     }
 
     /// <summary> Takes back a step when it is still the newest one (the old UndoRedo(undo: true)). </summary>
@@ -1192,12 +1305,28 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
     // ---- helpers ----
 
     /// <summary> Puts a dress item's items and customize values on. Returns what went on and a sentence when something did not. </summary>
-    private (Dictionary<string, ulong> Items, Dictionary<string, int> Customize, string Problem) PutOn(DressItem item)
+    private (Dictionary<string, ulong> Items, Dictionary<string, int> Customize, string Problem, string Note) PutOn(DressItem item)
     {
         var items = new Dictionary<string, ulong>();
         var bad   = 0;
+        var note  = string.Empty;
+        JObject? held = null;
         foreach (var (slotId, itemId) in item.Picks)
         {
+            // a weapon only in a hand that holds its class now (the job's): else the mod is on, the hand keeps its own
+            if (slotId is GearSlots.MainHandId or GearSlots.OffHandId && WeaponCategory is { } category)
+            {
+                held ??= _ipc.GetStateJson(PlayerIndex);
+                var now  = GlamourerState.ItemIn(held, GearSlots.NameOf(slotId)!);
+                var want = category(itemId);
+                if (!WearRules.CanHold(want?.Id, now == 0 ? null : category(now)?.Id, slotId == GearSlots.OffHandId))
+                {
+                    note = Loc.F("Your job cannot hold a {0}; the mod is on for when you do.", want?.Name ?? item.Name);
+                    Said("wearing: a weapon of another class than the job holds was left in the mod");
+                    continue;
+                }
+            }
+
             if (_ipc.SetItem(PlayerIndex, slotId, itemId) is Ipc.GlamourerSuccess or Ipc.GlamourerNothingDone && GearSlots.NameOf(slotId) is { } slot)
                 items[slot] = itemId;
             else
@@ -1217,10 +1346,10 @@ public sealed partial class Wardrobe : IWardrobe, IDisposable
         else if (item.Sockets.Any(GearSlots.IsCustomization))
         {
             // the old plugin said so too: a hair or face mod with no part for this race, clan and gender
-            return (items, customize, Loc.F("{0} has nothing for your character.", item.Name));
+            return (items, customize, Loc.F("{0} has nothing for your character.", item.Name), note);
         }
 
-        return (items, customize, bad > 0 ? Loc.F("Glamourer could not put on all of {0}.", item.Name) : string.Empty);
+        return (items, customize, bad > 0 ? Loc.F("Glamourer could not put on all of {0}.", item.Name) : string.Empty, note);
     }
 
     private bool Ready(out string why)

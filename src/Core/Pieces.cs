@@ -7,6 +7,8 @@ public enum PieceGroup
     Top,
     Clothes,
     Jewellery,
+    /// <summary> Weapons: the main hand and the off hand. </summary>
+    Weapons,
     Body,
 
     /// <summary> The user's own shelves. </summary>
@@ -47,6 +49,11 @@ public static class Pieces
     /// left finger (or both). A part is never placed here; moving a card here means moving it to <see cref="Rings"/>.
     /// </summary>
     public const string RingsLeft = "ringsleft";
+
+    /// <summary> Weapons worn in the main hand (a weapon mod with a main-hand model). </summary>
+    public const string MainHand = "mainhand";
+    /// <summary> Weapons and shields worn in the off hand. </summary>
+    public const string OffHand  = "offhand";
 
     public const string Hair  = "hair";
     public const string Face  = "face";
@@ -96,6 +103,9 @@ public static class Pieces
         new(Rings, "Rings · right", PieceGroup.Jewellery, Rings),
         new(RingsLeft, "Rings · left", PieceGroup.Jewellery, RingsLeft),
 
+        new(MainHand, "Main hand", PieceGroup.Weapons, MainHand),
+        new(OffHand, "Off hand", PieceGroup.Weapons, OffHand),
+
         new(Hair, "Hair", PieceGroup.Body, Hair),
         new(Face, "Face", PieceGroup.Body, Face),
         new(Makeup, "Makeup", PieceGroup.Body, Makeup),
@@ -119,7 +129,8 @@ public static class Pieces
 
     /// <summary> True for the clothes and jewellery shelves (what a Look holds by default). </summary>
     public static bool IsOutfitPiece(string id)
-        => id is Head or Top or Gloves or Bottoms or Legwear or Shoes or Earrings or Necklace or Bracelets or Rings;
+        => id is Head or Top or Gloves or Bottoms or Legwear or Shoes or Earrings or Necklace or Bracelets or Rings
+            or MainHand or OffHand;
 
     /// <summary> True for the body shelves (a Look only touches these when the user says so). </summary>
     public static bool IsBodyPiece(string id)

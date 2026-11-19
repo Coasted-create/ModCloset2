@@ -81,6 +81,9 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
         public double ChangedAt;
         public bool Settled;
 
+        /// <summary> The game is drawing the same thing anew (a redraw, a teleport): its model went or lost its materials. </summary>
+        public bool Redrawn;
+
         /// <summary> Since when the drawn model has had materials the game has not loaded (null: all there). </summary>
         public double? IncompleteSince;
     }
@@ -147,6 +150,13 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
     public const int GoneKept = 400;
     private bool _wasBusy;
     private bool _afterRedraw;
+
+    /// <summary>
+    /// The user asked for what is to be applied (a colour, a palette, pointing, an undo): applied at once. Otherwise it
+    /// follows the game (a redraw, a piece read) and waits until every worn piece is settled and read, so one redraw
+    /// is coloured once, not once per piece as its materials come in.
+    /// </summary>
+    private bool _asked;
     private double _lastRepairLog = double.MinValue;
 
     /// <summary> The repair line in the log at most this often. </summary>
@@ -485,6 +495,7 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
 
             _lit   = (bar, area, now);
             _dirty = true;
+            _asked = true;
         }
     }
 
@@ -500,6 +511,7 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
             return;
         _lit   = null;
         _dirty = true;
+        _asked = true;
     }
 
     // ======================================================================= for the plugin
@@ -526,9 +538,11 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                     _afterRedraw = true;
                 }
                 _wasBusy = busy;
-                if (_dirty && now >= _nextApply)
+                // Glamourer is asked only when the foundation's pace allows it (not while the game loads the character, not
+                // in a frame where another call ran); what follows the game also waits until every piece is settled
+                if (_dirty && now >= _nextApply && (_asked || !Settling) && _world.MayCall)
                     Apply(now);
-                else if (!_dirty && now >= _nextCheck)
+                else if (!_dirty && now >= _nextCheck && _world.MayCall)
                     CheckRowsStillThere(now);
                 if (_ownedChanged && now >= _nextOwnedSave)
                 {
@@ -874,6 +888,7 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
     private void Changed()
     {
         _dirty   = true;
+        _asked   = true;
         _rebuild = true;
         BuildSaved(); // "in use" follows the palette
         ++Version;
@@ -916,6 +931,7 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                 track.ChangedAt         = now;
                 track.SignatureAtChange = track.ModelSignature;
                 track.Settled           = false;
+                track.Redrawn           = false;
                 changed                 = true;
             }
             else if (!ReferenceEquals(track.Showing, s) && track.Showing != s)
@@ -948,14 +964,17 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                     var complete  = model is null || model.Materials.All(m => m is not null);
                     if (signature != track.ModelSignature)
                     {
+                        var drawnBefore = track.ModelSignature.Length > 0;
                         track.Model          = model;
                         track.ModelSignature = signature;
                         changed              = true;
-                        if (!complete && track.Settled)
+                        if ((!complete || model is null && drawnBefore) && track.Settled)
                         {
-                            // the same thing, redrawn by someone else: wait for its materials before reading it again
-                            // (meanwhile its rows are held, so nothing goes back to the mod's colours)
+                            // the same thing, redrawn by someone else (its materials not loaded yet, or its model gone for
+                            // now): wait for it before reading it again (meanwhile its rows are held, so nothing goes back
+                            // to the mod's colours, and nothing is put on until every piece is there again: once per redraw)
                             track.Settled           = false;
+                            track.Redrawn           = true;
                             track.SignatureAtChange = string.Empty;
                             track.ChangedAt         = now;
                         }
@@ -966,6 +985,7 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
                     if (!track.Settled && materialsThere && (track.ModelSignature != track.SignatureAtChange || now - track.ChangedAt >= SettleTime))
                     {
                         track.Settled = true;
+                        track.Redrawn = false;
                         changed       = true;
                     }
                 }
@@ -1314,6 +1334,7 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
         if (changed)
         {
             ++GlamourerCalls;
+            _world.Called();
             var result = _glamourer.ApplyState(GlamourerRows.MaterialsOnly(state, materials), _world.PlayerIndex, 0);
             if (result != 0)
             {
@@ -1366,6 +1387,7 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
         _forceOwn.Clear();
         _applyProblem = string.Empty;
         _dirty        = false; // a finished reading or a change of what shows asks again
+        _asked        = false;
         _nextApply    = now + ApplyInterval;
         _nextCheck    = now + CheckInterval;
     }
@@ -1388,9 +1410,14 @@ public sealed class OutfitColours : IOutfitColours, IDisposable
         => _owned.Count > 0 || !atRest && _gone.Count > 0 || _forceRows.Count > 0 || _forceOwn.Count > 0 || _lit is not null
          || _runs.Count > 0 && (_memory.DressEverything || _runs.Any(r => _memory.Knows(r.MemoryKey)));
 
+    /// <summary> The game is drawing a worn piece anew (a redraw, a teleport): what follows the game waits for it (see <see cref="_asked"/>). </summary>
+    private bool Settling
+        => _slots.Values.Any(t => t.Redrawn && !t.Settled);
+
     private JObject? GetState(out int code)
     {
         ++GlamourerCalls;
+        _world.Called();
         return _glamourer.GetState(_world.PlayerIndex, out code);
     }
 

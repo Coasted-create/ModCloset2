@@ -55,11 +55,17 @@ public sealed partial class WindowFace
                 case PopFilters:
                     FiltersMenu();
                     break;
+                case PopGearsets when _ui.PopupContext is Guid gl:
+                    BindMenu(gl, true);
+                    break;
+                case PopJobs when _ui.PopupContext is Guid jl:
+                    BindMenu(jl, false);
+                    break;
                 case PopKinds:
                     KindsMenu();
                     break;
-                case PopPicker when _ui.PopupContext is PickTarget pick && _s.Colours is { } oc:
-                    Picker(oc, pick);
+                case PopPicker when _ui.PopupContext is PickTarget pick && (_s.Colours is not null || IsSheetPick(pick)):
+                    Picker(_s.Colours, pick);
                     break;
                 case PopRowState when _ui.PopupContext is string bar && _s.Colours is { } oc2:
                     RowStateMenu(oc2, bar);

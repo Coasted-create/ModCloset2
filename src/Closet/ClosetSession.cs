@@ -672,6 +672,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         // take-off tried for this thing means nothing once it moved.
         _tries.RemoveAll(t => t.Nothing && thing.Any(p => p.Key == t.Key));
         var step = Guid.NewGuid();
+        _wardrobe.WithCharacter(null);
         _wardrobe.Keep(step, Loc.F("Keep {0}", target.Name), requests);
         PushUndo(new UndoEntry { Step = step, What = target.Name, OutfitStep = true });
         _keeping.Add(new PendingKeep(step, null, null));
@@ -969,6 +970,8 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
 
         _byKey[part.Key]   = part;
         _shelfOf[part.Key] = shelf;
+        if (part.Info.Kind.Length > 0 && !KindNames.Known(part.Info.Kind))
+            _kindCasing.TryAdd(part.Info.Kind.ToLowerInvariant(), part.Info.Kind);
 
         // nothing to wear (an animation, a sound…) while the user does not show those: no card anywhere, no count, not
         // searched, never on To sort; still known (the looks wear a mod as a whole), and on Hidden when the user hid it
@@ -1937,8 +1940,17 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         }
     }
 
+    /// <summary>
+    /// How a kind the closet has no name for is written (a weapon's class as the game names it, "Gladiator's Arm"): the kind
+    /// chips count kinds in lower case.
+    /// </summary>
+    private readonly Dictionary<string, string> _kindCasing = new(StringComparer.Ordinal);
+
+    private string KindChipName(string kind)
+        => KindNames.Known(kind) ? KindNames.Plural(kind) : _kindCasing.TryGetValue(kind, out var written) ? written : KindNames.Plural(kind);
+
     /// <summary> Kind chips: a shelf with 40 or more parts and at least two kinds with 5 or more each (SPEC). </summary>
-    private static IReadOnlyList<KindChip> Chips(int count, IReadOnlyDictionary<string, int> counts)
+    private IReadOnlyList<KindChip> Chips(int count, IReadOnlyDictionary<string, int> counts)
     {
         if (count < ChipShelfSize)
             return Array.Empty<KindChip>();
@@ -1947,7 +1959,7 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         if (kinds.Count < 2)
             return Array.Empty<KindChip>();
         var chips = new List<KindChip> { new() { Id = string.Empty, Name = Loc.T("All"), Count = count } };
-        chips.AddRange(kinds.Select(k => new KindChip { Id = k.Kind, Name = KindNames.Plural(k.Kind), Count = k.Count }));
+        chips.AddRange(kinds.Select(k => new KindChip { Id = k.Kind, Name = KindChipName(k.Kind), Count = k.Count }));
         return chips;
     }
 
@@ -2699,6 +2711,13 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             return;
         }
 
+        // the game has no empty main hand: a weapon is only ever swapped for another one
+        if (piece == Pieces.MainHand)
+        {
+            SetStatus(Loc.T("The main hand always holds a weapon: put on another one instead."), false);
+            return;
+        }
+
         var parts = ShelfParts(piece);
         // a ring shelf: what is on its finger only (the other hand keeps its ring)
         var hand = HandOfShelf(piece);
@@ -2759,6 +2778,9 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
     /// </summary>
     private List<TryRequest> TryRequests(bool keep = false)
     {
+        // a look's colours and showings go with its parts (any other try: none)
+        _wardrobe.WithCharacter(_lookTry is not null ? _lookCharacter : null);
+
         // a mod with nothing saved is put on with the closet's pick; body and race choices made by hand go over it
         // (and a hair, face, tail or ear part is put on with the choice that replaces the number it shows with)
         var list = _tries.Select(t => Request(t) with { Options = RequestOptions(t) }).ToList();
@@ -3353,7 +3375,8 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
         var list = new List<WornPart>();
         foreach (var socket in Enum.GetValues<Socket>())
         {
-            if (socket is Socket.None or Socket.Other or Socket.MainHand or Socket.OffHand)
+            // (weapons are outfit pieces since 0.7.11: a look keeps the sword it was saved with)
+            if (socket is Socket.None or Socket.Other)
                 continue;
 
             // a body mod's model in the body or legs slot (nothing worn there) is no piece of that slot: only a part of its
@@ -3455,9 +3478,33 @@ public sealed partial class ClosetSession : IClosetSession, ILooksOutfit, IDispo
             }
         }
 
-        _lookTry = _tries.Count > 0 || _colourTrying ? (look.Look, look.Colourway, look.Name, look.Note) : null;
+        _lookTry       = _tries.Count > 0 || _colourTrying ? (look.Look, look.Colourway, look.Name, look.Note) : null;
+        _lookCharacter = look.Character;
+
+        // only the character's colours or showings differ: put on at once, one step (Undo takes them back)
+        if (_lookTry is null && look.Character is { IsEmpty: false } only)
+        {
+            var step = Guid.NewGuid();
+            _wardrobe.WithCharacter(only);
+            _wardrobe.Keep(step, Loc.F("Keep {0}", look.Name), Array.Empty<TryRequest>());
+            _wardrobe.WithCharacter(null);
+            _lookCharacter = null;
+            PushUndo(new UndoEntry { Step = step, What = look.Name, OutfitStep = true });
+            _keeping.Add(new PendingKeep(step, (look.Look, look.Colourway, look.Name, look.Note), null));
+            SetStatus(Loc.F("Kept {0}.", look.Name), false);
+            Changed();
+            return;
+        }
+
         PreviewTries();
     }
+
+    /// <summary> The colours and showings of the look being tried (null: none, or no look). </summary>
+    private CharacterLook? _lookCharacter;
+
+    /// <summary> The character's colours and showings as Glamourer has them (the looks' sheet and its "Take mine now"). </summary>
+    public CharacterLook? Character
+        => _wardrobe.CharacterNow;
 
     // ======== undo ========
 

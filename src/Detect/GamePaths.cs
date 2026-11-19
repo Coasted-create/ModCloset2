@@ -23,7 +23,10 @@ public enum FileKind : byte
 /// whichever part has that set or uses the file, and make no part of their own.
 /// </summary>
 /// <param name="Socket"> The socket, or None when it only attaches to another part. </param>
-/// <param name="OtherKind"> For <see cref="Socket.Other"/> and weapons: "animation", "effect", "sound", "interface", "mount or minion", "world", "helper", "weapon". </param>
+/// <param name="OtherKind">
+/// For <see cref="Socket.Other"/> and weapons: "animation", "effect", "sound", "interface", "mount or minion", "world",
+/// "helper", "weapon", "prop" (a model under chara/weapon outside every weapon range: what emotes and poses hold).
+/// </param>
 /// <param name="SetType"> 'e' equipment, 'a' accessory, 'w' weapon, 'h' human part (hair, face…), '\0' none. </param>
 /// <param name="Set"> Gear set id, or the hair / face / tail / body number of a human part. </param>
 /// <param name="Race"> Race code from the path (201 for c0201), 0 when none. </param>
@@ -139,9 +142,13 @@ public static partial class GamePaths
         var weapon = Weapon().Match(p);
         if (weapon.Success)
         {
+            // A weapon's effects (…/vfx/…, textures too), sounds and animations are not the weapon: files not worn.
             if (file is FileKind.Effect or FileKind.Sound or FileKind.Animation)
                 return Other(file, OtherKindOf(file));
-            return new PathInfo(Socket.MainHand, "weapon", file, 'w', int.Parse(weapon.Groups[1].Value), 0, false);
+            if (p.Contains("/vfx/", StringComparison.Ordinal))
+                return Other(file, "effect");
+            var set = int.Parse(weapon.Groups[1].Value);
+            return new PathInfo(WeaponSocket(set), WeaponClass(set) is null ? "prop" : "weapon", file, 'w', set, 0, false);
         }
 
         if (p.StartsWith("chara/common/texture/", StringComparison.Ordinal))
@@ -244,7 +251,7 @@ public static partial class GamePaths
         => m.ObjectType switch
         {
             "equipment" or "accessory" => GearSlot(m.Slot),
-            "weapon"                   => Socket.MainHand,
+            "weapon"                   => WeaponSocket(m.Set),
             "character" or "human"     => m.BodySlot switch
             {
                 "hair" => Socket.Hair,
@@ -343,6 +350,66 @@ public static partial class GamePaths
             "offhand"                       => Socket.OffHand,
             _                               => Socket.None,
         };
+
+    // ---- weapons: the class and the hand by the model set's range, as the game numbers them (w0201 a sword, w2251 a
+    // katana's sheath). Ranges as in Penumbra.GameData's weapon id table, crafting and gathering tools as Glamourer's
+    // starting weapons have them (w5001 / w5041 carpenter, w7201 / w7255 fisher). Index: (set - 1) / 100; a set whose
+    // remainder (set - 1) % 100 reaches Off is the off-hand piece of that class.
+    private static readonly Dictionary<int, (string Main, string Off, int From)> WeaponRanges = new()
+    {
+        [1]  = ("shield", "shield", 0),   // shields are all off hand
+        [2]  = ("sword", "", 100),
+        [3]  = ("fists", "fists", 50),
+        [4]  = ("axe", "", 100),
+        [5]  = ("lance", "", 100),
+        [6]  = ("bow", "quiver", 97),
+        [7]  = ("wand", "", 100),
+        [8]  = ("staff", "", 100),
+        [9]  = ("wand", "", 100),
+        [10] = ("staff", "", 100),
+        [15] = ("greatsword", "", 100),
+        [16] = ("fists", "fists", 50),
+        [17] = ("grimoire", "", 100),
+        [18] = ("daggers", "daggers", 50),
+        [20] = ("gun", "gun", 98),
+        [21] = ("globe", "globe", 98),
+        [22] = ("katana", "katana", 50),
+        [23] = ("rapier", "rapier", 50),
+        [24] = ("staff", "", 100),
+        [25] = ("gunblade", "", 100),
+        [26] = ("chakrams", "chakrams", 50),
+        [27] = ("nouliths", "", 100),
+        [28] = ("scythe", "", 100),
+        [29] = ("brush", "palette", 50),
+        [30] = ("twinfangs", "twinfangs", 50),
+        [31] = ("twinfangs", "twinfangs", 50),
+        [33] = ("axe", "", 100),
+        [50] = ("tool", "tool", 40), [51] = ("tool", "tool", 40), [52] = ("tool", "tool", 40), [53] = ("tool", "tool", 40),
+        [54] = ("tool", "tool", 40), [55] = ("tool", "tool", 40), [56] = ("tool", "tool", 40), [57] = ("tool", "tool", 40),
+        [70] = ("tool", "tool", 50), [71] = ("tool", "tool", 50), [72] = ("tool", "tool", 50),
+    };
+
+    /// <summary>
+    /// The class of a weapon model set ("sword", "shield", "quiver", "tool"…), or null for a set outside every weapon range:
+    /// a prop (what emotes and poses put in the hand, w19xx, w90xx…), never equipped.
+    /// </summary>
+    public static string? WeaponClass(int set)
+        => set > 0 && WeaponRanges.TryGetValue((set - 1) / 100, out var r) ? ((set - 1) % 100 >= r.From ? r.Off : r.Main) : null;
+
+    /// <summary> True for a weapon set the off hand holds: shields, quivers, the second dagger, a katana's sheath, off-hand tools. </summary>
+    public static bool IsOffHand(int set)
+        => set > 0 && WeaponRanges.TryGetValue((set - 1) / 100, out var r) && (set - 1) % 100 >= r.From;
+
+    /// <summary> The hand a weapon model set is held in (props: the main hand, where the reader always put weapons). </summary>
+    public static Socket WeaponSocket(int set)
+        => IsOffHand(set) ? Socket.OffHand : Socket.MainHand;
+
+    /// <summary> The weapon set of a game path under chara/weapon (0 for none). </summary>
+    public static int WeaponSet(string gamePath)
+    {
+        var m = Weapon().Match(gamePath);
+        return m.Success ? int.Parse(m.Groups[1].Value) : 0;
+    }
 
     /// <summary> True for sockets whose models are gear (they can carry bare skin that is not the item). </summary>
     public static bool IsGear(Socket s)

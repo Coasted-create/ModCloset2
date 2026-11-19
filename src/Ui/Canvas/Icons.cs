@@ -27,6 +27,8 @@ public static class Icons
     public const string Bodies    = "bodies";
     public const string Makeup    = "makeup";
     public const string Nails     = "nails";
+    public const string MainHand  = "mainhand";
+    public const string OffHand   = "offhand";
     public const string ToSort    = "tosort";
     public const string Other     = "other";
     public const string Hidden    = "hidden";
@@ -66,6 +68,8 @@ public static class Icons
     public const string Lock        = "ui.lock";
     public const string Attach      = "ui.attach";
     public const string Filter      = "ui.filter";
+    public const string Pencil      = "ui.pencil";
+    public const string Refresh     = "ui.refresh";
     public const string Unlock      = "ui.unlock";
 
     private static readonly Dictionary<string, string> Paths = new(StringComparer.Ordinal)
@@ -91,6 +95,8 @@ public static class Icons
         // a lipstick: the slanted tip, the tube and its cap (not a face)
         [Makeup]    = "M10 3.5l4 2.5v4.5h-4V3.5zM9 10.5h6v3H9zM8.5 13.5h7V21h-7z",
         [Bodies]    = "M10.2 4.2a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0-3.6 0M8.5 8h7c.8 0 1.3.7 1.1 1.4L15 13.5c-.3 1-.3 1.8 0 2.8l.6 4.7M8.5 8c-.8 0-1.3.7-1.1 1.4L9 13.5c.3 1 .3 1.8 0 2.8l-.6 4.7M12 16.5V21",
+        [MainHand]  = "M19.5 4.5L20 4l-.5.5-9 9M19.5 4.5H16L7.5 13l3.5 3.5L19.5 8zM6 12.5l5.5 5.5M8.5 15.5l-4.5 4.5M3.5 19.5l1 1",
+        [OffHand]   = "M12 3.5l7.5 2.8v5.4c0 4.4-3.1 7.6-7.5 9-4.4-1.4-7.5-4.6-7.5-9V6.3zM12 3.5v17.2M4.6 11h14.8",
         [Nails]     = "M9 21v-9a3 3 0 0 1 6 0v9M9.8 11.5c0-4 .8-8 2.2-8s2.2 4 2.2 8",
         [ToSort]    = "M4 13l2.5-8h11L20 13v6H4v-6zM4 13h5a3 3 0 0 0 6 0h5",
         [Other]     = "M4 8l8-4 8 4v8l-8 4-8-4V8zM4 8l8 4 8-4M12 12v8",
@@ -123,6 +129,8 @@ public static class Icons
         [Move]        = "M5 12h12M13 7l5 5-5 5",
         [Question]    = "M3.5 12a8.5 8.5 0 1 0 17 0a8.5 8.5 0 1 0-17 0M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17v.5",
         [OpenOutside] = "M13 4h7v7M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5",
+        [Pencil]      = "M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4",
+        [Refresh]     = "M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v5h-5",
         [Filter]      = "M4 5.5h16l-6.2 7.2v5.8l-3.6-1.8v-4z",
         [Attach]      = "M3 5.5h10v13H3zM21 12h-5.5M18.5 9l-3 3 3 3",
         [Lock]        = "M6.5 11h11a1.5 1.5 0 0 1 1.5 1.5v6.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19v-6.5A1.5 1.5 0 0 1 6.5 11zM8 11V7.5a4 4 0 0 1 8 0V11M12 14.5v2.5",

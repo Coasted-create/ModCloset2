@@ -47,6 +47,19 @@ public interface IColourWorld
 
     /// <summary> The game is redrawing the character (or the wardrobe waits for that): models are not read and nothing is applied meanwhile. </summary>
     bool Busy { get; }
+
+    /// <summary>
+    /// The colours may call Glamourer on their own in this frame (putting rows on after following what is worn, checking
+    /// that they are still there). False while the game loads the character and the seconds after, or when another call
+    /// of the closet already ran in this frame: they wait for a later frame. (Default: always.)
+    /// </summary>
+    bool MayCall
+        => true;
+
+    /// <summary> The colours called Glamourer in this frame (it takes the frame's turn). </summary>
+    void Called()
+    {
+    }
 }
 
 /// <summary> Glamourer's state, as the foundation's Ipc has it (GetStateJson / ApplyState). </summary>

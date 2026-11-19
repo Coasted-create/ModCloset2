@@ -193,9 +193,16 @@ public sealed partial class OnYouFace
     /// Where the place under the mouse leads, in a small pill just outside its glow, on the body's outer side and at the
     /// mouse's height (so it never covers the place it names, and follows the mouse along a long place like a leg).
     /// </summary>
+    /// <summary>
+    /// A shelf's name in On you: the rail's, except the two ring shelves, which say their side ("Rings · right",
+    /// "Rings · left"; a hand leads to its own), whatever the rail calls them.
+    /// </summary>
+    private static string ShelfName(RailRow row)
+        => row.Id is Pieces.Rings or Pieces.RingsLeft && Pieces.BuiltIn.FirstOrDefault(d => d.Id == row.Id) is { } def ? Loc.T(def.Name) : row.Name;
+
     private void Label(PlaceInfo p, Rect box)
     {
-        var text = string.Join(" · ", p.Shelves.Select(r => r.Name));
+        var text = string.Join(" · ", p.Shelves.Select(ShelfName));
         Stats.Label = text;
         var st = Theme.Caption;
         var b  = _c.Bounds;
@@ -344,7 +351,7 @@ public sealed partial class OnYouFace
     {
         var cards  = Cards;
         var shelf  = _s.Rail.FirstOrDefault(r => r.Id == _shelf);
-        var name   = shelf?.Name ?? _shelf;
+        var name   = shelf is null ? _shelf : ShelfName(shelf);
         var tabs   = open is not null && open.Shelves.Count > 1 ? open.Shelves : new List<RailRow>();
         var lead   = _index >= 0 ? Loc.F("{0} · {1}", name, Loc.F("{0} of {1}", _index + 1, cards.Count)) : name;
         var title  = _index >= 0 && _index < cards.Count ? cards[_index].Name : Loc.T("Nothing");
@@ -358,7 +365,7 @@ public sealed partial class OnYouFace
         // width: the widest line, between the mockup's 164 and a limit that keeps long mod names from pushing it wide
         var w = P(MinText);
         if (tabs.Count > 0)
-            w = Math.Max(w, tabs.Sum(t => _c.Measure(t.Name, TabStyle).X + P(20)) + P(4) * (tabs.Count - 1));
+            w = Math.Max(w, tabs.Sum(t => _c.Measure(ShelfName(t), TabStyle).X + P(20)) + P(4) * (tabs.Count - 1));
         w = Math.Max(w, _c.Measure(lead, Theme.Small).X + (_s.Trying.Busy ? P(30) : 0));
         w = Math.Max(w, Math.Min(P(MaxText), _c.Measure(title, NameStyle).X));
         foreach (var (cap, text) in hints)
@@ -536,7 +543,7 @@ public sealed partial class OnYouFace
         {
             foreach (var tab in c.Tabs)
             {
-                var w    = _c.Measure(tab.Name, TabStyle).X + P(20);
+                var w    = _c.Measure(ShelfName(tab), TabStyle).X + P(20);
                 var r    = new Rect(x, y, w, P(24));
                 var id   = "tab/" + tab.Id;
                 var on   = tab.Id == _shelf;
@@ -546,7 +553,7 @@ public sealed partial class OnYouFace
                     _c.FillRect(r, Theme.Picked, P(12));
                 else
                     _c.StrokeRect(r, Theme.Edge, P(12), Math.Max(1, _u));
-                Painter.TextIn(_c, r, tab.Name, TabStyle, on ? Theme.Accent : resp.Hovered ? Theme.Text : Theme.Muted, 0.5f);
+                Painter.TextIn(_c, r, ShelfName(tab), TabStyle, on ? Theme.Accent : resp.Hovered ? Theme.Text : Theme.Muted, 0.5f);
                 if (resp.Clicked && !on)
                     SwitchShelf(open, tab.Id);
                 x += w + P(4);

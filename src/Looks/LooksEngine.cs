@@ -17,7 +17,7 @@ namespace ModCloset2.Looks;
 /// unless something changed); the lists are rebuilt when something they show changed, never every frame. No Dalamud
 /// types: the game comes in through the seams (Seams.cs).
 /// </remarks>
-public sealed class LooksEngine : ILooks
+public sealed partial class LooksEngine : ILooks, ILookSheet
 {
     private readonly ILooksOutfit _outfit;
     private readonly ILooksLibrary _library;
@@ -106,14 +106,24 @@ public sealed class LooksEngine : ILooks
     private readonly Lens _lens;
 
     private Healing.Index? _healIndex;
+
+    /// <summary>
+    /// Pieces whose mod is gone and that a full search found nothing for, and what the library held then (part and shelf).
+    /// A later full search looks for them again only when a part came or moved since: with only mods going away, nothing
+    /// new can match (a user who deleted mods used by many looks paid seconds on every later change).
+    /// </summary>
+    private readonly HashSet<LookPiece> _searchedInVain = new(ReferenceEqualityComparer.Instance);
+    private HashSet<string>? _placesAtHeal;
     private bool _fullHealDue;
     private DateTime _nextFullHeal = DateTime.MinValue;
     private readonly Dictionary<string, string[]> _words = new(StringComparer.Ordinal);
     private int _healIndexFor = int.MinValue;
 
     public LooksEngine(ILooksOutfit outfit, ILooksLibrary library, ILooksColours? colours, ILooksStore store, ILooksUndo undo, ILooksClock? clock = null,
-        IDetector? detector = null, Action<string>? log = null)
+        IDetector? detector = null, Action<string>? log = null, ILooksGame? game = null, ILooksDesigns? designs = null)
     {
+        _game     = game;
+        _designs  = designs;
         _outfit   = outfit;
         _library  = library;
         _colours  = colours;
@@ -175,6 +185,7 @@ public sealed class LooksEngine : ILooks
         {
             Poll();
             var now = _clock.UtcNow;
+            FollowGame();
             if (_unsettledSince is { } since && !_outfit.Trying && now - since >= LookRules.QuietTime)
                 Settle(now);
             if (_removed.Count > 0 && now >= _nextPrune)
@@ -320,9 +331,12 @@ public sealed class LooksEngine : ILooks
             Changed();
         }
 
-        if (parts.Count == 0 && off.Count == 0 && colours is null)
+        // the character's colours and showings the look sets, where they differ from what is worn
+        var character = CharacterToPut(l);
+        if (parts.Count == 0 && off.Count == 0 && colours is null && character is null)
             return; // it is on already, exactly
-        _outfit.TryLook(new LookTry(l.Id, way, NameOf(l), LookTexts.TryNote(Matching.Count(l, _lens), missing, l.Body, _lens.BodyOnly(l)), parts, off, colours));
+        _outfit.TryLook(new LookTry(l.Id, way, NameOf(l), LookTexts.TryNote(Matching.Count(l, _lens), missing, l.Body, _lens.BodyOnly(l)), parts, off, colours,
+            character));
     }
 
     public void Pin(Guid look)
@@ -503,8 +517,11 @@ public sealed class LooksEngine : ILooks
             }
         }
 
+        // the colours and showings it keeps take what the character wears now
+        TakeMine(l);
         if (l.Pinned)
             Choose(l.Id);
+        RefreshDesign(l);
         Step(Loc.F("Update {0}", NameOf(l)), before, Snapshot(l.Id));
     }
 
@@ -521,6 +538,7 @@ public sealed class LooksEngine : ILooks
         var before = Snapshot(l.Id);
         var old    = NameOf(l);
         l.Name = name;
+        RefreshDesign(l);
         Step(Loc.F("Rename {0}", old), before, Snapshot(l.Id));
     }
 
@@ -976,6 +994,20 @@ public sealed class LooksEngine : ILooks
     private void Heal(bool full)
     {
         var changed = false;
+
+        // a full search: has any part come (or moved to another shelf) since the last one?
+        var cameSince = true;
+        if (full)
+        {
+            var places = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in _library.Parts)
+                places.Add($"{p.Key}|{p.Shelf}");
+            cameSince     = _placesAtHeal is null || places.Any(k => !_placesAtHeal.Contains(k));
+            _placesAtHeal = places;
+            if (cameSince)
+                _searchedInVain.Clear();
+        }
+
         foreach (var look in _looks)
         {
             var taken = Matching.Keys(look);
@@ -1006,8 +1038,14 @@ public sealed class LooksEngine : ILooks
                     continue;
                 }
 
-                if (Healing.Find(piece, piece.Shelf, _library, full ? HealIndex : null, taken) is not { } found)
+                if (full && !cameSince && _searchedInVain.Contains(piece))
                     continue;
+                if (Healing.Find(piece, piece.Shelf, _library, full ? HealIndex : null, taken) is not { } found)
+                {
+                    if (full)
+                        _searchedInVain.Add(piece);
+                    continue;
+                }
                 // at most one piece per socket: a part in a socket another piece holds is no answer
                 if (look.Pieces.Any(p => p != piece && (p.Key == found.Key || LookRules.Clash(p.Socket, _lens.ShelfOf(p), found.Key.Socket, found.Shelf))))
                     continue;

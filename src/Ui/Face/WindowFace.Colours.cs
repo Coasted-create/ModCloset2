@@ -47,7 +47,15 @@ public sealed partial class WindowFace
         var t = _dragTarget;
         _pickDrag   = 0;
         _dragTarget = null;
-        if (t is null || _s?.Colours is not { } oc)
+        if (t is null)
+            return;
+        if (IsSheetPick(t))
+        {
+            SendPick(null, t, true);
+            return;
+        }
+
+        if (_s?.Colours is not { } oc)
             return;
         var there = t.Bar is null
             || (t.Area == WholePiece ? oc.Pieces.Any(p => p.Id == t.Bar) : AreaOf(oc, t.Bar, t.Area) is not null);
@@ -610,10 +618,26 @@ public sealed partial class WindowFace
         return null;
     }
 
-    private void SendPick(IOutfitColours oc, PickTarget t, bool done)
+    /// <summary> The picker is open on one of a look's colours of yours (the look sheet), not on the outfit's colours. </summary>
+    private static bool IsSheetPick(PickTarget t)
+        => t.Area == SheetColourArea && t.Bar is not null && t.Bar.StartsWith("sheet:", StringComparison.Ordinal);
+
+    private void SendPick(IOutfitColours? oc, PickTarget t, bool done)
     {
         var rgb = ColourMath.FromHsv(_pickH, _pickS, _pickV);
-        if (!done && rgb == _pickSent)
+        if (IsSheetPick(t))
+        {
+            // a look's colour of yours: one undo step for the whole drag, on letting go
+            if (done && _sheetLook is { } look && SheetApi is { } api)
+            {
+                _pickSent = rgb;
+                api.SetColourValue(look, t.Bar![6..], rgb);
+            }
+
+            return;
+        }
+
+        if (!done && rgb == _pickSent || oc is null)
             return;
         _pickSent = rgb;
         if (t.Bar is null)
@@ -624,12 +648,22 @@ public sealed partial class WindowFace
             oc.SetArea(t.Bar, t.Area, rgb, done);
     }
 
-    private void Picker(IOutfitColours oc, PickTarget t)
+    private void Picker(IOutfitColours? oc, PickTarget t)
     {
-        var wholePiece = t.Bar is not null && t.Area == WholePiece;
-        var piece      = wholePiece ? oc.Pieces.FirstOrDefault(p => p.Id == t.Bar) : null;
-        var area       = t.Bar is null || wholePiece ? null : AreaOf(oc, t.Bar, t.Area);
-        if (t.Bar is not null && area is null && piece is null)
+        var sheetPick  = IsSheetPick(t);
+        var sheetColour = sheetPick ? CurrentSheet?.Colours.FirstOrDefault(c => c.Key == t.Bar![6..]) : null;
+        if (sheetPick && sheetColour is null || !sheetPick && oc is null)
+        {
+            // the look or its colour went away while the picker was open
+            FinishColourDrag();
+            _ui.ClosePopup();
+            return;
+        }
+
+        var wholePiece = !sheetPick && t.Bar is not null && t.Area == WholePiece;
+        var piece      = wholePiece ? oc!.Pieces.FirstOrDefault(p => p.Id == t.Bar) : null;
+        var area       = sheetPick || t.Bar is null || wholePiece ? null : AreaOf(oc!, t.Bar, t.Area);
+        if (!sheetPick && t.Bar is not null && area is null && piece is null)
         {
             // the piece came off, or its areas changed, while the picker was open (a drag on it ends: its target is gone)
             FinishColourDrag();
@@ -640,9 +674,10 @@ public sealed partial class WindowFace
         var u     = _u;
         var w     = P(264);
         var inner = w - P(28);
-        var title = wholePiece ? Loc.T("The whole piece") : area?.Label ?? Loc.F("{0} colour", RoleName(t.Role));
-        var note  = wholePiece ? string.Empty : area?.ShareText ?? Loc.T("everything that follows it");
-        var foot  = wholePiece ? Loc.T("Every part of it takes this colour, as a dye would.")
+        var title = sheetColour is not null ? sheetColour.Name : wholePiece ? Loc.T("The whole piece") : area?.Label ?? Loc.F("{0} colour", RoleName(t.Role));
+        var note  = sheetColour is not null || wholePiece ? string.Empty : area?.ShareText ?? Loc.T("everything that follows it");
+        var foot  = sheetColour is not null ? Loc.T("The look puts this colour on you; it is saved when you let go.")
+            : wholePiece ? Loc.T("Every part of it takes this colour, as a dye would.")
             : area is null ? Loc.T("Everything that follows this colour changes with it.") : Loc.T("This area is lit up on your character while you point at it.");
         var follows = new List<ColourRole>();
         if (area is not null || piece is not null)
@@ -777,16 +812,16 @@ public sealed partial class WindowFace
                 if (role == ColourRole.Own)
                     Painter.Icon(_c, Icons.Pin, new Vector2(btn.X + P(16), btn.Center.Y), P(12), Theme.Muted, 2.2f);
                 else
-                    Dot(new Vector2(btn.X + P(16), btn.Center.Y), P(6), oc.Palette.Of(role));
+                    Dot(new Vector2(btn.X + P(16), btn.Center.Y), P(6), oc!.Palette.Of(role));
                 Painter.TextIn(_c, new Rect(btn.X + P(30), btn.Y, btn.W - P(36), btn.H), RoleName(role), Theme.Caption, Theme.Text);
                 if (resp.Clicked && !chosen && t.Bar is not null)
                 {
                     if (!wholePiece)
-                        oc.Follow(t.Bar, t.Area, role);
+                        oc!.Follow(t.Bar, t.Area, role);
                     else if (role == ColourRole.Own)
-                        oc.ResetPiece(t.Bar);
+                        oc!.ResetPiece(t.Bar);
                     else
-                        oc.FollowPiece(t.Bar, role);
+                        oc!.FollowPiece(t.Bar, role);
                 }
             }
 

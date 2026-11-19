@@ -29,7 +29,7 @@ public sealed partial class WindowFace
     /// colours or the looks; it comes back with the shelf).
     /// </summary>
     public bool PanelShown
-        => _panelOpen && _s is not null && _view == View.Shelf && !Searching && _s.Selected != Pieces.ToSort;
+        => _panelOpen && _s is not null && (_sheetLook is not null ? CurrentSheet is not null : _view == View.Shelf && !Searching && _s.Selected != Pieces.ToSort);
 
     /// <summary> The panel's own controls (for tests). </summary>
     public Gui PanelGui
@@ -37,7 +37,10 @@ public sealed partial class WindowFace
 
     public void ClosePanel()
     {
-        _panelOpen = false;
+        _panelOpen     = false;
+        _sheetLook     = null;
+        _sheetOpenSlot = null;
+        _sheetRename   = null;
         _panelUi.ClosePopup();
     }
 
@@ -45,6 +48,7 @@ public sealed partial class WindowFace
     private void OpenPanelOn(PartKey? key)
     {
         _panelOpen = true;
+        _sheetLook = null; // a piece: the panel shows its options (not a look's sheet)
         if (key is { } k)
             _shownWant = k;
     }
@@ -63,7 +67,10 @@ public sealed partial class WindowFace
             Stats.Places["panel"] = b;
             canvas.FillRect(b, Theme.Window, P(14));
             canvas.StrokeRect(b, Theme.Line, P(14), Math.Max(1, _u));
-            PanelContent(b);
+            if (_sheetLook is not null && SheetApi is { } api && CurrentSheet is { } sheet)
+                SheetContent(b, api, sheet);
+            else
+                PanelContent(b);
             DrawPopups();
             if (_panelUi.PopupId.Length > 0 && _panelUi.PopupOpenedFrame == _panelUi.Frame)
                 _mainUi.ClosePopup();
@@ -176,7 +183,7 @@ public sealed partial class WindowFace
         }
         else
         {
-            var size = new Vector2(PanelWidth(_u), closet.H);
+            var size = new Vector2(_sheetLook is not null ? SheetWidth(_u) : PanelWidth(_u), closet.H);
             var pos  = WindowGeometry.PanelPos(closet, size, screen, PanelGap(_u));
             r = new Rect(pos.X, pos.Y, size.X, size.Y);
         }

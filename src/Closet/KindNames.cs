@@ -32,6 +32,32 @@ public static class KindNames
         ["world"]           = ("World", "World"),
         ["helper"]          = ("Helper files", "Helper files"),
         ["weapon"]          = ("Weapon", "Weapons"),
+        // weapon classes (the detector's kinds on Main hand and Off hand) and emote props (Everything else)
+        ["sword"]           = ("Sword", "Swords"),
+        ["shield"]          = ("Shield", "Shields"),
+        ["fists"]           = ("Fists", "Fists"),
+        ["axe"]             = ("Axe", "Axes"),
+        ["lance"]           = ("Lance", "Lances"),
+        ["bow"]             = ("Bow", "Bows"),
+        ["quiver"]          = ("Quiver", "Quivers"),
+        ["wand"]            = ("Wand", "Wands"),
+        ["staff"]           = ("Staff", "Staves"),
+        ["greatsword"]      = ("Greatsword", "Greatswords"),
+        ["grimoire"]        = ("Grimoire", "Grimoires"),
+        ["daggers"]         = ("Daggers", "Daggers"),
+        ["gun"]             = ("Gun", "Guns"),
+        ["globe"]           = ("Globe", "Globes"),
+        ["katana"]          = ("Katana", "Katanas"),
+        ["rapier"]          = ("Rapier", "Rapiers"),
+        ["gunblade"]        = ("Gunblade", "Gunblades"),
+        ["chakrams"]        = ("Chakrams", "Chakrams"),
+        ["nouliths"]        = ("Nouliths", "Nouliths"),
+        ["scythe"]          = ("Scythe", "Scythes"),
+        ["brush"]           = ("Brush", "Brushes"),
+        ["palette"]         = ("Palette", "Palettes"),
+        ["twinfangs"]       = ("Twinfangs", "Twinfangs"),
+        ["tool"]            = ("Tool", "Tools"),
+        ["prop"]            = ("Prop", "Props"),
         ["vest"]            = ("Vest", "Vests"),
         ["corset"]          = ("Corset", "Corsets"),
         ["harness"]         = ("Harness", "Harnesses"),
@@ -118,6 +144,10 @@ public static class KindNames
             Socket.BodyBase     => Loc.T("Body"),
             _                   => string.Empty,
         };
+
+    /// <summary> A kind the closet has names for. </summary>
+    public static bool Known(string kind)
+        => Names.ContainsKey(kind);
 
     /// <summary> "Dresses" for "dress"; an unknown kind with a capital letter. Translated. </summary>
     public static string Plural(string kind)

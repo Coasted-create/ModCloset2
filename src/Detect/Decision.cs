@@ -59,13 +59,21 @@ public static partial class Decision
 
         // The "Other" part only stands on its own when it is more than helper files for the worn parts. Skin textures
         // read as helper files by an older reader (made-up paths) are the skin.
-        var parts = facts.Parts.Select(AsSkin).Where(p => p.Socket != Socket.Other || !IsSupportOnly(p, facts)).ToList();
+        // Weapons in two hands are two parts (older facts kept them in one).
+        var parts = facts.Parts.SelectMany(InHands).Select(AsSkin).Where(p => p.Socket != Socket.Other || !IsSupportOnly(p, facts)).ToList();
 
         // Rule 3: gear models that show only bare skin are the body (a body mod's shapes for the bare character). In a
         // body mod (one with such models, or with body models of its own) every gear model on the bare body's sets (the
         // empty slot, the smallclothes) is the body too, whatever it wears by default (its own underwear, nails,
         // piercings): a body mod never shows its bare models as clothes.
         var bare = parts.Where(IsBareBody).ToList();
+        // A mod named after a body ("Neolithe core", "RueXB+ body") whose gear models are all on the bare body's sets is that
+        // body: what those models show is mostly skin, so their few hundredths of surface are the body's own underwear,
+        // pubes or piercings, not a garment. (Hands with nails stay nails.) Clothes made for a body name it later on
+        // ("Simple set for Rue+ & YAB+") or name the garment ("Rue+ lace bra").
+        if (NamedForBody(facts))
+            bare.AddRange(parts.Where(p => !bare.Contains(p) && GamePaths.IsGear(p.Socket) && p.Socket != Socket.Hands && OnlyBodySets(p)
+                                        && p.Model is { } m && m.SkinArea > m.Area));
         if (bare.Count > 0 || parts.Any(p => p.Socket == Socket.BodyBase && p.HasModel))
             bare.AddRange(parts.Where(p => !bare.Contains(p) && GamePaths.IsGear(p.Socket) && OnBodySets(p) && p.Model is { SkinArea: > 0 }));
         parts = parts.Where(p => !bare.Contains(p)).ToList();
@@ -118,7 +126,7 @@ public static partial class Decision
         var twoShelves = folderHits.Select(h => h.Piece).Where(x => x.Length > 0).Distinct().Count() >= 2;
         foreach (var hit in folderHits)
             foreach (var owner in twoShelves ? parts.Where(q => hit.Piece.Length > 0) : BestFor(hit, parts, readings, words) is { } o ? new[] { o } : Array.Empty<PartFacts>())
-                if (twoShelves || hit.Piece != SlotPrior(owner.Socket) && !NamesTheSlot(hit with { Alone = true }, owner.Socket))
+                if (twoShelves || !IsSlotWord(hit, owner) && !NamesTheSlot(hit with { Alone = true }, owner.Socket))
                     folderWords[owner].Add((hit, Tuning.Votes.WordFolder, "folder"));
 
         foreach (var p in parts)
@@ -374,6 +382,10 @@ public static partial class Decision
     private static bool NamesTheSlot(WordHit hit, Socket socket)
         => hit.Alone && socket == Socket.Ears && hit.Word is "ear" or "ears";
 
+    /// <summary> A word for the shelf the part's slot means (a weapon's word for a part in a hand). </summary>
+    private static bool IsSlotWord(WordHit hit, PartFacts p)
+        => hit.Piece == SlotPrior(p.Socket) || hit.Kind == "weapon" && p.Socket is Socket.MainHand or Socket.OffHand;
+
     private static bool SameModel(PartFacts a, PartFacts b)
         => a.Model is { Area: > 0 } ma && b.Model is { Area: > 0 } mb && GamePaths.IsGear(a.Socket) && GamePaths.IsGear(b.Socket)
          && MathF.Abs(ma.Area - mb.Area) <= 0.01f * MathF.Max(ma.Area, mb.Area);
@@ -382,6 +394,63 @@ public static partial class Decision
     private static bool SeenFiles(PartFacts p)
         => p.Paths.Any(x => x.EndsWith(".tex", StringComparison.Ordinal) || x.EndsWith(".mtrl", StringComparison.Ordinal) || x.EndsWith(".mdl", StringComparison.Ordinal))
          && !p.Paths.Any(x => Path.GetExtension(x) is ".sklb" or ".skp" or ".phyb" or ".kdb" or ".pbd" or ".shpk" or ".pap" or ".tmb" or ".eid" or ".atch" or ".avfx");
+
+    /// <summary>
+    /// A weapon part by hand: the off hand's sets (a shield, a quiver, the second dagger, a katana's sheath) are a part of
+    /// their own, as the reader keeps them from facts version 6 on; older facts had every weapon file in the main hand.
+    /// Props stay with the main hand, where the reader puts them.
+    /// </summary>
+    private static IEnumerable<PartFacts> InHands(PartFacts p)
+    {
+        if (p.Socket != Socket.MainHand || !p.Sets.Any(GamePaths.IsOffHand))
+            return new[] { p };
+        if (p.Sets.All(GamePaths.IsOffHand))
+            return new[] { Hand(p, Socket.OffHand) };
+        return new[] { Hand(p, Socket.MainHand), Hand(p, Socket.OffHand) };
+    }
+
+    private static PartFacts Hand(PartFacts p, Socket hand)
+    {
+        bool Mine(int set) => GamePaths.WeaponSocket(set) == hand;
+        bool PathMine(string path) => GamePaths.WeaponSet(path) is var set && (set == 0 ? hand == Socket.MainHand : Mine(set));
+        var paths     = p.Paths.Where(PathMine).ToList();
+        var modelSets = p.ModelSets.Where(Mine).ToList();
+        var model     = p.Model is { } m && PathMine(m.GamePath) ? m : null;
+        return new PartFacts
+        {
+            Socket      = hand,
+            OtherKinds  = new Dictionary<string, int>(p.OtherKinds),
+            // Only the first paths are kept: the count is shared in their proportion.
+            PathCount   = p.Paths.Count == 0 ? 0 : Math.Max(paths.Count, (int)Math.Round(p.PathCount * (double)paths.Count / p.Paths.Count)),
+            Paths       = paths,
+            Sets        = p.Sets.Where(Mine).ToList(),
+            ModelSets   = modelSets,
+            RaceCodes   = p.RaceCodes,
+            Metas       = p.Metas,
+            Groups      = p.Groups,
+            Texts       = p.Texts,
+            Shaders     = p.Shaders,
+            Model       = model,
+            HasModel    = modelSets.Count > 0 || model is not null,
+            SwappedFrom = hand == Socket.MainHand ? p.SwappedFrom : new List<Socket>(),
+        };
+    }
+
+    /// <summary> True for a part in a hand with a weapon of the game's (not only props). </summary>
+    private static bool HoldsWeapon(PartFacts p)
+        => p.Socket is Socket.MainHand or Socket.OffHand && p.Sets.Any(s => GamePaths.WeaponClass(s) is not null);
+
+    /// <summary>
+    /// The class of the weapon a hand holds ("sword", "shield"…) when all its weapons are of one class, "weapon" for several
+    /// (an outfit's bow and katana), "prop" for a part with props only.
+    /// </summary>
+    public static string WeaponKind(PartFacts p)
+    {
+        var classes = (p.ModelSets.Count > 0 ? p.ModelSets : p.Sets).Select(GamePaths.WeaponClass).OfType<string>().Distinct().ToList();
+        if (classes.Count == 0 && p.ModelSets.Count > 0)
+            classes = p.Sets.Select(GamePaths.WeaponClass).OfType<string>().Distinct().ToList();
+        return classes.Count == 1 ? classes[0] : classes.Count > 1 ? "weapon" : "prop";
+    }
 
     /// <summary>
     /// Facts of an older reader put a body's skin textures at made-up paths ("…/chara/bibo_mid_base.tex") into a helper
@@ -412,6 +481,17 @@ public static partial class Decision
     /// The gear sets of the bare body: e0000 (what shows when a slot is empty) and the smallclothes (e0279, e9903). A body
     /// mod ships its shapes for the bare character there.
     /// </summary>
+    /// <summary> A gear part whose every model is on the bare body's sets (e0000, e0279, e9903). </summary>
+    private static bool OnlyBodySets(PartFacts p)
+        => p.HasModel && OnBodySets(p) && p.ModelSets.All(s => s is 279 or 9903)
+         && p.Paths.Where(x => x.EndsWith(".mdl", StringComparison.Ordinal)).All(x => x.StartsWith("chara/equipment/e0000/", StringComparison.Ordinal)
+             || x.StartsWith("chara/equipment/e0279/", StringComparison.Ordinal) || x.StartsWith("chara/equipment/e9903/", StringComparison.Ordinal));
+
+    /// <summary> A mod named after a body (its name's first word is one: "Neolithe core") whose name names no garment. </summary>
+    private static bool NamedForBody(ModFacts facts)
+        => BodyMods.NamedAfter(facts.Name) is not null
+         && !Words.Scan(facts.Name).Any(h => h.Piece.Length > 0 && h.Piece != Pieces.Other && Pieces.IsOutfitPiece(h.Piece));
+
     public static bool OnBodySets(PartFacts p)
         => p.Paths.Any(x => x.StartsWith("chara/equipment/e0000/model/", StringComparison.Ordinal))
          || p.ModelSets.Count > 0 && p.ModelSets.All(s => s is 279 or 9903);
@@ -489,7 +569,7 @@ public static partial class Decision
         var bestScore = 0f;
         foreach (var p in parts)
         {
-            var score = (SlotPrior(p.Socket) == hit.Piece ? 1f : 0f)
+            var score = (IsSlotWord(hit, p) ? 1f : 0f)
                       + readings[p].Opinion.Votes.GetValueOrDefault(hit.Piece) * readings[p].Opinion.Strength
                       + (words[p].Any(w => w.Hit.Piece == hit.Piece) ? 0.5f : 0f)
                       // A model whose shape leaves room for that shelf (rule 6: the word belongs to the part it fits).
@@ -510,6 +590,15 @@ public static partial class Decision
         List<(WordHit Hit, float Weight, string Source)> folderHits)
     {
         var v = Tuning.Votes;
+        if (HoldsWeapon(p))
+        {
+            // A weapon's words ("scythe", "sword") speak for the hand that holds it.
+            (WordHit Hit, float Weight, string Source) ToHand((WordHit Hit, float Weight, string Source) h)
+                => h.Hit.Kind == "weapon" ? (h.Hit with { Piece = SlotPrior(p.Socket) }, h.Weight, h.Source) : h;
+            wordHits   = wordHits.Select(ToHand).ToList();
+            folderHits = folderHits.Select(ToHand).ToList();
+        }
+
         var slot     = SlotOpinion(p);
         var words    = WordsOpinion(wordHits, EvidenceKind.Words);
         var folder   = WordsOpinion(folderHits, EvidenceKind.Folder);
@@ -588,10 +677,16 @@ public static partial class Decision
         }
 
         // Rule 4: a slot that can only mean one thing is sure alone (skin textures, face textures, a face model), and
-        // rule 5: weapons and files outside every slot are never clothing. Stray words do not unsettle them.
+        // rule 5: weapons and files outside every slot are never clothing. Stray words do not unsettle them. A weapon of the
+        // game's is on its hand's shelf (Main hand, Off hand); props (what emotes and poses hold) are not worn.
         var conclusive = p.Socket is Socket.FaceTextures or Socket.Face or Socket.BodyBase;
         var notWorn    = p.Socket is Socket.Other or Socket.MainHand or Socket.OffHand;
-        if (conclusive)
+        if (HoldsWeapon(p))
+        {
+            best       = p.Socket == Socket.OffHand ? Pieces.OffHand : Pieces.MainHand;
+            confidence = v.ConfNotWorn;
+        }
+        else if (conclusive)
         {
             // The body with models of its own is a body (Bodies); skin textures alone, tattoos, freckles are Skin. Words
             // never make a body: a base's name in a mod's name only says what it was made for.
@@ -706,8 +801,9 @@ public static partial class Decision
             return best == Pieces.Other ? v.ConfNotWorn : v.ConfConflict;
         }
 
+        // In a hand: the game puts it there (a weapon on its hand's shelf, a prop among the files not worn).
         if (p.Socket is Socket.MainHand or Socket.OffHand)
-            return best == Pieces.Other ? v.ConfNotWorn : v.ConfConflict;
+            return best is Pieces.Other or Pieces.MainHand or Pieces.OffHand ? v.ConfNotWorn : v.ConfConflict;
 
         var nonSlotAgainst = against.Count(w => w.Kind != EvidenceKind.Slot);
 
@@ -778,6 +874,8 @@ public static partial class Decision
             Socket.Tail         => Pieces.Tail,
             Socket.EarShape     => Pieces.Ears,
             Socket.BodyBase     => Pieces.Skin,
+            Socket.MainHand     => Pieces.MainHand,
+            Socket.OffHand      => Pieces.OffHand,
             _                   => Pieces.Other,
         };
 
@@ -809,6 +907,13 @@ public static partial class Decision
     {
         var o = new Opinion { Kind = EvidenceKind.Slot, Strength = 1, Phrase = SlotPhrase(p.Socket) };
         o.Votes[SlotPrior(p.Socket)] = 1;
+        if (p.Socket is Socket.MainHand or Socket.OffHand && !HoldsWeapon(p))
+        {
+            // Models under chara/weapon outside every weapon range: props for emotes and poses, never equipped.
+            o.Votes.Clear();
+            o.Votes[Pieces.Other] = 1;
+            o.Phrase = "prop";
+        }
         if (p.FromCustomPaths && p.Socket == Socket.BodyBase)
         {
             // Not a game slot: made-up paths that name a body or skin.
@@ -1305,13 +1410,16 @@ public static partial class Decision
     private static string KindOf(PartFacts p, string piece, BodyReading body, List<(WordHit Hit, float Weight, string Source)> words, float confidence)
     {
         var kind = KindFromWordsOrShape(p, piece, body, words, confidence);
-        return piece == Pieces.Other || KindFits(piece, kind, confidence < DetectorThresholds.Unsure) ? kind : ShapeKind(p, piece, body);
+        return piece is Pieces.Other or Pieces.MainHand or Pieces.OffHand || KindFits(piece, kind, confidence < DetectorThresholds.Unsure)
+            ? kind : ShapeKind(p, piece, body);
     }
 
     private static string KindFromWordsOrShape(PartFacts p, string piece, BodyReading body, List<(WordHit Hit, float Weight, string Source)> words, float confidence)
     {
+        if (p.Socket is Socket.MainHand or Socket.OffHand && piece is Pieces.Other or Pieces.MainHand or Pieces.OffHand)
+            return WeaponKind(p);
         if (piece == Pieces.Other)
-            return p.Socket is Socket.MainHand or Socket.OffHand ? "weapon" : OtherKind(p) is var k && k != "custom" ? k : "helper";
+            return OtherKind(p) is var k && k != "custom" ? k : "helper";
 
         // A word that names a kind of this shelf wins ("kimono" on Tops → dress).
         // An unsure part also takes a kind that could become a shelf of its own ("horns" on a tail-slot part).

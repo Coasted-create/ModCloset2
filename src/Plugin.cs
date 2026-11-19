@@ -98,6 +98,8 @@ public sealed class Plugin : IDalamudPlugin
             Wardrobe = wardrobe = new Wardrobe(Ipc, _game, Config, SaveConfig, log, Journal, Library.Part, Library.Mod, MyBody)
             {
                 PriorityAdvisor = AdvisePriority,
+                // a weapon only into a hand that holds its class (the job's)
+                WeaponCategory  = _items.WeaponCategory,
             };
 
             Session = new ClosetSession(Library, Wardrobe, Config.Closet, SaveConfig, applyLanguage: _ => ApplyLanguage(),
@@ -123,7 +125,7 @@ public sealed class Plugin : IDalamudPlugin
             // the colours: what shows comes from the session's tries and the wardrobe's kept outfit, their memory is kept
             // with the session's remembered things, and every change is one step of the session's history
             var world = new ColourWorld(Session, Wardrobe, () => _game.PlayerAddress, _game.WhyNot, GameItemIn, busy: () => _game.Zoning,
-                playerKey: _game.PlayerKey);
+                playerKey: _game.PlayerKey, mayCall: () => _game.Pace.May(IpcWork.Colours), called: () => _game.Pace.Took(IpcWork.Colours));
             // the colours' memory has a file of its own, written in the background (it moves over from the settings once)
             _colourFile = new ColourFileStore(configDir, Session, m => _log.Warning($"Mod Closet 2 colours: {m}"));
             Colours = ColoursSetup.Create(world, new GlamourerStates(Ipc), _colourFile, new ColourUndo(Session, () => Colours), data, log);
@@ -134,7 +136,9 @@ public sealed class Plugin : IDalamudPlugin
             // settings are only read (once, for the old looks)
             _looksFile = new LooksFileStore(configDir, Path.Combine(pluginConfigs, "ModCloset.json"), m => _log.Warning($"Mod Closet 2 looks: {m}"));
             Looks = new LooksEngine(Session, new LooksLibrary(Session, Library), new LooksColours(Colours), _looksFile,
-                new LooksUndo(Session, () => Looks), new SystemLooksClock(), Library.Detector, m => _log.Information(m));
+                new LooksUndo(Session, () => Looks), new SystemLooksClock(), Library.Detector, m => _log.Information(m),
+                // a look worn by itself (a gearset or job), and kept as a Glamourer design
+                new LooksGame(objects, data), new LooksDesigns(Ipc, m => _log.Information(m)));
             Session.Looks = Looks;
 
             // both put back what is being tried when they close (their OnClose)
@@ -175,6 +179,11 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnFrameworkUpdate(IFramework _)
     {
+        // the pace first: is the game loading (then nothing calls Penumbra or Glamourer), and was the last frame long
+        // (then the periodic reads wait)
+        FrameReport.NewFrame();
+        _game.Frame(_framework.UpdateDelta.TotalMilliseconds, FrameReport.LastOwnMs);
+
         Timed("ipc", () => Ipc.Refresh());
         Timed("library", () =>
         {
@@ -209,11 +218,13 @@ public sealed class Plugin : IDalamudPlugin
         if (_facesWereOpen && !facesOpen)
             Timed("looks", Looks.ClosetClosed);
         _facesWereOpen = facesOpen;
-        Timed("keys", () =>
+        // the keys: nothing to filter on a loading screen (nothing is drawn, the game takes no keys); each face timed on
+        // its own, so a slow frame's line says which one it was
+        if (!_game.LoadingScreen)
         {
-            _window.FilterGameKeys(_keys);
-            _onYou.FilterGameKeys(_keys);
-        });
+            Timed("keys (window)", () => _window.FilterGameKeys(_keys));
+            Timed("keys (on you)", () => _onYou.FilterGameKeys(_keys));
+        }
         SaveIfDue();
     }
 
@@ -244,6 +255,7 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         var ms = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        FrameReport.PartEnded(ms);
         if (SlowFrames.ShouldLog(name, ms, limitMs, DateTime.UtcNow, _slowLogged))
             _log.Warning(FrameReport.Describe(name, ms));
     }

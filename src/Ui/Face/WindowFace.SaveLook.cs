@@ -39,9 +39,32 @@ public sealed partial class WindowFace
         }
     }
 
+    // the look sheet's two extra ticks in the save sheet (not ticked at first)
+    private const string TickColours = "#colours";
+    private const string TickShowing = "#showing";
+
     /// <summary> The body shelves ticked to go along (in the order the closet gives them). </summary>
     private List<string> SaveTicked(WearingNow now)
         => now.BodyShelves.Where(b => _saveTicks.TryGetValue(b.Shelf, out var on) ? on : b.Default).Select(b => b.Shelf).ToList();
+
+    /// <summary>
+    /// After a save with "also my colours" / "also what is shown" ticked: every colour (showing) of the new look is made
+    /// Saved, then all of them take what is worn now (TakeMineNow).
+    /// </summary>
+    private void SaveAlso(ILookSheet? api, Guid look)
+    {
+        var colours = _saveTicks.TryGetValue(TickColours, out var c) && c;
+        var showing = _saveTicks.TryGetValue(TickShowing, out var s) && s;
+        if (api is null || !colours && !showing || api.Sheet(look) is not { } sheet)
+            return;
+        if (colours)
+            foreach (var col in sheet.Colours)
+                api.SetColour(look, col.Key, Keep.Saved);
+        if (showing)
+            foreach (var show in sheet.Showing)
+                api.SetShowing(look, show.Key, Keep.Saved, show.On);
+        api.TakeMineNow(look);
+    }
 
     private void SaveLookPanel()
     {
@@ -66,7 +89,8 @@ public sealed partial class WindowFace
         var note    = already ? Painter.Wrap(_c, Loc.F("This is already “{0}”.", now.Name), w - P(40), Theme.Caption, 2) : new List<string>();
         var inner   = w - P(40);
         var rowH    = P(30);
-        var ticks   = now.BodyShelves.Count;
+        var sheetApi = looks.Sheet;
+        var ticks   = now.BodyShelves.Count + (sheetApi is not null ? 2 : 0);
         var lh      = _c.LineHeight(Theme.Caption);
         var h = P(20) + P(24) + P(12) + (note.Count > 0 ? note.Count * lh + P(10) : 0)
               + P(36) + P(14) + (ticks > 0 ? P(14) + P(8) + ticks * rowH + P(10) : 0)
@@ -147,6 +171,29 @@ public sealed partial class WindowFace
                     _saveTicks[b.Shelf] = !on;
                 y += rowH;
             }
+
+            // with the look sheet: also my colours, also what is shown
+            if (sheetApi is not null)
+                foreach (var (key, label) in new[] { (TickColours, Loc.T("Also my colours")), (TickShowing, Loc.T("Also what is shown")) })
+                {
+                    var row  = new Rect(x - P(6), y, inner + P(12), rowH - P(2));
+                    var id   = "save-take/" + key;
+                    Stats.Places[id] = row;
+                    var on   = _saveTicks.TryGetValue(key, out var t) && t;
+                    var resp = _ui.Interact(id, row);
+                    if (resp.Hovered)
+                        _c.FillRect(row, Theme.HoverWash, P(7));
+                    var check = new Rect(row.X + P(6), row.Center.Y - P(9), P(18), P(18));
+                    _c.FillRect(check, on ? Theme.Accent : Theme.Rail, P(5));
+                    if (!on)
+                        _c.StrokeRect(check, Theme.EdgeStrong, P(5), Math.Max(1, _u));
+                    else
+                        Painter.Icon(_c, Icons.Check, check.Center, P(13), Theme.OnAccent, 2.4f);
+                    Painter.TextIn(_c, new Rect(check.Right + P(10), row.Y, row.Right - check.Right - P(16), row.H), label, Theme.Caption, Theme.Text);
+                    if (resp.Clicked)
+                        _saveTicks[key] = !on;
+                    y += rowH;
+                }
         }
 
         // the buttons: Save (Enter), or "Save as new" beside "Update …" when it started from a look; Cancel (Esc)
@@ -161,7 +208,8 @@ public sealed partial class WindowFace
         var xLeft   = saveBox.X - P(8);
         if ((Painter.Button(_ui, "save-save", saveBox, save, ButtonKind.Primary, ok).Clicked || enter) && ok)
         {
-            looks.SaveNow(_saveName.Trim(), SaveTicked(now));
+            var saved = looks.SaveNow(_saveName.Trim(), SaveTicked(now));
+            SaveAlso(sheetApi, saved);
             _ui.ClosePopup();
             _ui.PopClip();
             return;

@@ -96,6 +96,14 @@ public enum RestoreTurn
 public static class WearRules
 {
     /// <summary>
+    /// Whether a hand can hold a weapon now: only one of the class the job holds there (the game's item category; Glamourer
+    /// keeps to that too). An unknown class (an item the game data does not know) is left to Glamourer. A main hand whose
+    /// class is unknown tries; an off hand that holds nothing (a two-handed job) holds nothing else either.
+    /// </summary>
+    public static bool CanHold(uint? want, uint? heldNow, bool offHand)
+        => want is not { } w || (heldNow is { } h ? h == w : !offHand);
+
+    /// <summary>
     /// After an option write: redraw now, unless another option write is waiting right behind it (that one redraws once
     /// both are in, so the second does not wait for the first one's redraw to settle).
     /// </summary>

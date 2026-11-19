@@ -610,7 +610,7 @@ public sealed partial class WindowFace
     /// breaks every outfit.
     /// </summary>
     private static bool CanTakeOff(string piece)
-        => piece is not (Pieces.Skin or Pieces.Bodies);
+        => piece is not (Pieces.Skin or Pieces.Bodies or Pieces.MainHand);
 
     /// <summary> Taking off what is on in this shelf is being tried. </summary>
     private bool TakingOffHere()

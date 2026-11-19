@@ -157,7 +157,10 @@ public static class LookRules
 
 
 
-    /// <summary> The body itself (the body mod every outfit is made for: its socket, on Bodies or Skin) is never taken off by a look. </summary>
+    /// <summary>
+    /// The body itself (the body mod every outfit is made for: its socket, on Bodies or Skin) is never taken off by a look,
+    /// nor the main hand's weapon (the game has no empty main hand). The off hand can be empty.
+    /// </summary>
     public static bool CanTakeOff(Socket socket)
-        => socket != Socket.BodyBase;
+        => socket is not (Socket.BodyBase or Socket.MainHand);
 }

@@ -68,6 +68,8 @@ public sealed class Ipc : IDisposable
     private readonly ICallGateSubscriber<int, uint, (int, JObject?)> _glamourerGetStateJson;
     private readonly ICallGateSubscriber<object, int, uint, ulong, int> _glamourerApplyState;
     private readonly ICallGateSubscriber<int, byte, ulong, IReadOnlyList<byte>, uint, ulong, int> _glamourerSetItem;
+    private readonly ICallGateSubscriber<string, string, (int, Guid)> _glamourerAddDesign;
+    private readonly ICallGateSubscriber<Guid, int> _glamourerDeleteDesign;
 
     private DateTime _lastRefresh = DateTime.MinValue;
 
@@ -118,6 +120,9 @@ public sealed class Ipc : IDisposable
         _glamourerGetStateJson = pi.GetIpcSubscriber<int, uint, (int, JObject?)>("Glamourer.GetState");
         _glamourerApplyState   = pi.GetIpcSubscriber<object, int, uint, ulong, int>("Glamourer.ApplyState");
         _glamourerSetItem      = pi.GetIpcSubscriber<int, byte, ulong, IReadOnlyList<byte>, uint, ulong, int>("Glamourer.SetItem.V3");
+        // Glamourer's designs (API 1.x, DesignsApi.AddDesign / DeleteDesign: a design from JSON or base64 text, by name)
+        _glamourerAddDesign    = pi.GetIpcSubscriber<string, string, (int, Guid)>("Glamourer.AddDesign");
+        _glamourerDeleteDesign = pi.GetIpcSubscriber<Guid, int>("Glamourer.DeleteDesign");
 
         Refresh(force: true);
     }
@@ -359,6 +364,30 @@ public sealed class Ipc : IDisposable
     /// <summary> Applies a state: a base64 string from <see cref="GetState"/> or a Newtonsoft JObject. </summary>
     public int ApplyState(object state, int objectIndex, ulong flags)
         => Call("Glamourer.ApplyState", () => _glamourerApplyState.InvokeFunc(state, objectIndex, 0, flags), CallFailed);
+
+    /// <summary>
+    /// Makes a Glamourer design from a design text (JSON) under a name: Glamourer's code and the new design's id; null when
+    /// this Glamourer does not offer it (no such IPC: an older version), or Glamourer is not there.
+    /// </summary>
+    public (int Code, Guid Id)? AddDesign(string design, string name)
+    {
+        var started = FrameReport.CallStarted();
+        try
+        {
+            return _glamourerAddDesign.InvokeFunc(design, name);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            FrameReport.CallEnded("Glamourer.AddDesign", started);
+        }
+    }
+
+    public int DeleteDesign(Guid id)
+        => Call("Glamourer.DeleteDesign", () => _glamourerDeleteDesign.InvokeFunc(id), CallFailed);
 
     public int SetItem(int objectIndex, byte slot, ulong itemId)
         => Call("Glamourer.SetItem", () => _glamourerSetItem.InvokeFunc(objectIndex, slot, itemId, NoStains, 0, FlagOnce), CallFailed);
